@@ -40,12 +40,12 @@ from datetime import datetime
 import time
 
 import tensorflow as tf
-
+SEED = 1
+tf.set_random_seed(SEED)
 import cifar10
-
+import pdb
 FLAGS = tf.app.flags.FLAGS
-
-tf.app.flags.DEFINE_string('train_dir', '/users/hzhang2/hailin/models/tutorials/image/cifar10/cifar10_train1',
+tf.app.flags.DEFINE_string('train_dir', 'cifar10_train_origin_1',
                            """Directory where to write event logs """
                            """and checkpoint.""")
 tf.app.flags.DEFINE_integer('max_steps', 1000000,
@@ -59,6 +59,7 @@ tf.app.flags.DEFINE_integer('log_frequency', 10,
 def train():
   """Train CIFAR-10 for a number of steps."""
   with tf.Graph().as_default():
+    tf.set_random_seed(SEED)
     global_step = tf.train.get_or_create_global_step()
 
     # Get images and labels for CIFAR-10.
@@ -66,11 +67,23 @@ def train():
     # GPU and resulting in a slow down.
     with tf.device('/cpu:0'):
       images, labels = cifar10.distorted_inputs()
-
+    ''' chl: debug code to check if out images are deterministic
+    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)  
+    with tf.train.MonitoredTrainingSession(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
+      out_images, out_labels = sess.run([images, labels])      
+      pdb.set_trace()
+      pass
+    '''
     # Build a Graph that computes the logits predictions from the
     # inference model.
     logits = cifar10.inference(images, is_train=True)
-
+    '''
+    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)  
+    with tf.train.MonitoredTrainingSession(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
+      out_logits = sess.run([logits])      
+      pdb.set_trace()
+      pass
+    '''
     # Calculate loss.
     loss = cifar10.loss(logits, labels)
 

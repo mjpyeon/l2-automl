@@ -39,19 +39,22 @@ import os
 import re
 import sys
 import tarfile
-
+import pdb
 from six.moves import urllib
 import urllib2
 import tensorflow as tf
-
+SEED = 1
+tf.set_random_seed(SEED)
 import cifar10_input
-
+import custom_optimizer as cto
+import powersign
+import PowerSign1
 FLAGS = tf.app.flags.FLAGS
 
 # Basic model parameters.
 tf.app.flags.DEFINE_integer('batch_size', 128,
                             """Number of images to process in a batch.""")
-tf.app.flags.DEFINE_string('data_dir', '/users/hzhang2/hailin/models/tutorials/image/cifar10/cifar10_data',
+tf.app.flags.DEFINE_string('data_dir', 'cifar10_data',
                            """Path to the CIFAR-10 data directory.""")
 tf.app.flags.DEFINE_boolean('use_fp16', False,
                             """Train the model using fp16.""")
@@ -67,7 +70,7 @@ NUM_EXAMPLES_PER_EPOCH_FOR_EVAL = cifar10_input.NUM_EXAMPLES_PER_EPOCH_FOR_EVAL
 MOVING_AVERAGE_DECAY = 0.9999     # The decay to use for the moving average.
 NUM_EPOCHS_PER_DECAY = 350.0      # Epochs after which learning rate decays.
 LEARNING_RATE_DECAY_FACTOR = 0.1  # Learning rate decay factor.
-INITIAL_LEARNING_RATE = 0.1       # Initial learning rate.
+INITIAL_LEARNING_RATE = 0.005       # Initial learning rate.
 
 # If a model is trained with multiple GPUs, prefix all Op names with tower_name
 # to differentiate the operations. Note that this prefix is removed from the
@@ -354,8 +357,17 @@ def train(total_loss, global_step):
 
   # Compute gradients.
   with tf.control_dependencies([loss_averages_op]):
-    opt = tf.train.GradientDescentOptimizer(lr)
+    #opt = tf.train.GradientDescentOptimizer(lr)
+    #opt = powersign.PowerSignOptimizer(lr)
+    opt = PowerSign1.PowerSign(lr)
+    #opt = cto.PowerSign(lr)
     grads = opt.compute_gradients(total_loss)
+
+  #gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)  
+  #with tf.train.MonitoredTrainingSession(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
+  #  out_grads = sess.run([grads])      
+  #  pdb.set_trace()
+  #  pass
 
   # Apply gradients.
   apply_gradient_op = opt.apply_gradients(grads, global_step=global_step)

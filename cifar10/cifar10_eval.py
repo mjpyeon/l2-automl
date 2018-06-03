@@ -45,11 +45,11 @@ import cifar10
 
 FLAGS = tf.app.flags.FLAGS
 
-tf.app.flags.DEFINE_string('eval_dir', '/users/hzhang2/hailin/models/tutorials/image/cifar10/cifar10_eval1',
+tf.app.flags.DEFINE_string('eval_dir', 'cifar10_eval1',
                            """Directory where to write event logs.""")
 tf.app.flags.DEFINE_string('eval_data', 'test',
                            """Either 'test' or 'train_eval'.""")
-tf.app.flags.DEFINE_string('checkpoint_dir', '/users/hzhang2/hailin/models/tutorials/image/cifar10/cifar10_train1',
+tf.app.flags.DEFINE_string('checkpoint_dir', 'cifar10_train1',
                            """Directory where to read model checkpoints.""")
 tf.app.flags.DEFINE_integer('eval_interval_secs', 60 * 5,
                             """How often to run the eval.""")
@@ -148,6 +148,7 @@ def evaluate():
 def main(argv=None):  # pylint: disable=unused-argument
   cifar10.maybe_download_and_extract()
   if tf.gfile.Exists(FLAGS.eval_dir):
+    assert False
     tf.gfile.DeleteRecursively(FLAGS.eval_dir)
   tf.gfile.MakeDirs(FLAGS.eval_dir)
   evaluate()

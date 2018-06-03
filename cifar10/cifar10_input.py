@@ -20,10 +20,11 @@ from __future__ import division
 from __future__ import print_function
 
 import os
-
+import pdb
 from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
-
+SEED = 1
+tf.set_random_seed(SEED)
 # Process images of this size. Note that this differs from the original CIFAR
 # image size of 32 x 32. If one alters this number, then the entire model
 # architecture will change and any model would need to be retrained.
@@ -62,7 +63,7 @@ def read_cifar10(filename_queue):
   result = CIFAR10Record()
 
   # Dimensions of the images in the CIFAR-10 dataset.
-  # See http://www.cs.toronto.edu/~kri/users/hzhang2/hailin/models/tutorials/image/cifar10/cifar.html for a description of the
+  # See http://www.cs.toronto.edu/~kriz/cifar.html for a description of the
   # input format.
   label_bytes = 1  # 2 for CIFAR-100
   result.height = 32
@@ -116,7 +117,10 @@ def _generate_image_and_label_batch(image, label, min_queue_examples,
   """
   # Create a queue that shuffles the examples, and then
   # read 'batch_size' images + labels from the example queue.
-  num_preprocess_threads = 16
+  #SEED = 1
+  #tf.set_random_seed(SEED)
+  #num_preprocess_threads = 16
+  num_preprocess_threads = 1
   if shuffle:
     images, label_batch = tf.train.shuffle_batch(
         [image, label],
@@ -148,6 +152,8 @@ def distorted_inputs(data_dir, batch_size):
     images: Images. 4D tensor of [batch_size, IMAGE_SIZE, IMAGE_SIZE, 3] size.
     labels: Labels. 1D tensor of [batch_size] size.
   """
+  SEED = 1
+  tf.set_random_seed(SEED)
   filenames = [os.path.join(data_dir, 'data_batch_%d.bin' % i)
                for i in xrange(1, 6)]
   for f in filenames:
@@ -196,7 +202,11 @@ def distorted_inputs(data_dir, batch_size):
                              min_fraction_of_examples_in_queue)
     print ('Filling queue with %d CIFAR images before starting to train. '
            'This will take a few minutes.' % min_queue_examples)
-
+    #gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)
+    #with tf.train.MonitoredTrainingSession(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
+    #  out_float_images = sess.run([float_image])      
+    #  pdb.set_trace()
+    #  pass
   # Generate a batch of images and labels by building up a queue of examples.
   return _generate_image_and_label_batch(float_image, read_input.label,
                                          min_queue_examples, batch_size,
