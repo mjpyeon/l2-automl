@@ -69,11 +69,13 @@ def train_epoch(lr=0.1):
     logits = cifar10.inference(images, is_train=True)
     loss = cifar10.loss(logits, labels)
     train_op = cifar10.train(loss, global_step)
+    '''
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)  
     with tf.train.MonitoredTrainingSession(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
       out_logits, out_loss = sess.run([logits, loss])      
       pdb.set_trace()
       pass
+    '''
     class _LoggerHook(tf.train.SessionRunHook):
       """Logs loss and runtime."""
 
@@ -194,7 +196,7 @@ def main(argv=None):  # pylint: disable=unused-argument
   best_lr = 1e-5
   best_loss = 1e10
   #for lr in [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1]:
-  for lr in [1e0, 1e0, 1e0, 1e0, 1e1]:  
+  for lr in [1e0, 1e0, 1e0, 1e0, 1e0, 1e0, 1e0, 1e0, 1e0, 1e0]:  
     loss_out = train_epoch(lr)
     if best_loss > loss_out:
       best_loss = loss_out
