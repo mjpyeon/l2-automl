@@ -187,7 +187,6 @@ def inputs(eval_data):
     labels = tf.cast(labels, tf.float16)
   return images, labels
 
-
 def inference(images, is_train):
   """Build the CIFAR-10 model.
 
@@ -325,7 +324,7 @@ def _add_loss_summaries(total_loss):
   return loss_averages_op
 
 
-def train(total_loss, global_step):
+def train(total_loss, global_step, optimizer_code):
   """Train CIFAR-10 model.
 
   Create an optimizer and apply to all trainable variables. Add moving
@@ -360,7 +359,8 @@ def train(total_loss, global_step):
     #opt = tf.train.GradientDescentOptimizer(lr)
     #opt = powersign.PowerSignOptimizer(lr)
     #opt = PowerSign1.PowerSign(lr)
-    opt = cto.CustomOptimizer(lr)
+    opt = cto.CustomOptimizer(lr, optimizer_code)
+    #opt = tf.train.RMSPropOptimizer(lr)
     grads = opt.compute_gradients(total_loss)
 
   #gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)  

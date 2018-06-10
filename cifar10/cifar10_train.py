@@ -41,169 +41,175 @@ import time
 import math
 import tensorflow as tf
 SEED = 1
-tf.set_random_seed(SEED)
 import cifar10
 import pdb
 FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_string('train_dir', 'cifar10_train_origin_1',
-                           """Directory where to write event logs """
-                           """and checkpoint.""")
+													 """Directory where to write event logs """
+													 """and checkpoint.""")
 tf.app.flags.DEFINE_integer('max_steps', 1000000,
-                            """Number of batches to run.""")
+														"""Number of batches to run.""")
 tf.app.flags.DEFINE_boolean('log_device_placement', False,
-                            """Whether to log device placement.""")
+														"""Whether to log device placement.""")
 tf.app.flags.DEFINE_integer('log_frequency', 10,
-                            """How often to log results to the console.""")
+														"""How often to log results to the console.""")
 num_batches_per_epoch = cifar10.NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN / FLAGS.batch_size 
 
 
 def train_epoch(lr=0.1):
-  cifar10.INITIAL_LEARNING_RATE = lr
-  best_loss = 1e10
-  tf.reset_default_graph()
-  with tf.Graph().as_default():
-    tf.set_random_seed(SEED)
-    global_step = tf.train.get_or_create_global_step()
-    with tf.device('/cpu:0'):
-      images, labels = cifar10.distorted_inputs()
-    logits = cifar10.inference(images, is_train=True)
-    loss = cifar10.loss(logits, labels)
-    train_op = cifar10.train(loss, global_step)
-    '''
-    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)  
-    with tf.train.MonitoredTrainingSession(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
-      out_logits, out_loss = sess.run([logits, loss])      
-      pdb.set_trace()
-      pass
-    '''
-    class _LoggerHook(tf.train.SessionRunHook):
-      """Logs loss and runtime."""
+	cifar10.INITIAL_LEARNING_RATE = lr
+	best_loss = 1e10
+	#tf.reset_default_graph()
+	with tf.Graph().as_default():
+		tf.set_random_seed(SEED)
+		global_step = tf.train.get_or_create_global_step()
+		with tf.device('/cpu:0'):
+			images, labels = cifar10.distorted_inputs()
+		logits = cifar10.inference(images, is_train=True)
+		loss = cifar10.loss(logits, labels)
+		train_op = cifar10.train(loss, global_step)
+		'''
+		gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)  
+		with tf.train.MonitoredTrainingSession(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
+			out_logits, out_loss = sess.run([logits, loss])      
+			pdb.set_trace()
+			pass
+		'''
+		
+		class _LoggerHook(tf.train.SessionRunHook):
+			"""Logs loss and runtime."""
 
-      def begin(self):
-        self._step = -1
-        self._start_time = time.time()
+			def begin(self):
+				self._step = -1
+				self._start_time = time.time()
 
-      def before_run(self, run_context):
-        self._step += 1
-        return tf.train.SessionRunArgs(loss)  # Asks for loss value.
+			def before_run(self, run_context):
+				self._step += 1
+				return tf.train.SessionRunArgs(loss)  # Asks for loss value.
 
-      def after_run(self, run_context, run_values):
-        if self._step % FLAGS.log_frequency == 0:
-          current_time = time.time()
-          duration = current_time - self._start_time
-          self._start_time = current_time
+			def after_run(self, run_context, run_values):
+				if self._step % FLAGS.log_frequency == 0:
+					current_time = time.time()
+					duration = current_time - self._start_time
+					self._start_time = current_time
 
-          loss_value = run_values.results
-          examples_per_sec = FLAGS.log_frequency * FLAGS.batch_size / duration
-          sec_per_batch = float(duration / FLAGS.log_frequency)
+					loss_value = run_values.results
+					examples_per_sec = FLAGS.log_frequency * FLAGS.batch_size / duration
+					sec_per_batch = float(duration / FLAGS.log_frequency)
 
-          format_str = ('%s: step %d, loss = %.2f (%.1f examples/sec; %.3f '
-                        'sec/batch)')
-          print (format_str % (datetime.now(), self._step, loss_value,
-                               examples_per_sec, sec_per_batch))
-    with tf.train.MonitoredTrainingSession(
-        hooks=[tf.train.StopAtStepHook(last_step=num_batches_per_epoch),
-               _LoggerHook()],
-        config=tf.ConfigProto(
-            log_device_placement=FLAGS.log_device_placement)) as mon_sess:
-      while not mon_sess.should_stop():
-        loss_out, _ = mon_sess.run([loss, train_op])
-        if (math.isnan(loss_out)):
-          continue
-        if(best_loss > loss_out):
-          best_loss = loss_out
-  return best_loss
+					format_str = ('%s: step %d, loss = %.2f (%.1f examples/sec; %.3f '
+												'sec/batch)')
+					print (format_str % (datetime.now(), self._step, loss_value,
+															 examples_per_sec, sec_per_batch))
+
+		with tf.train.MonitoredTrainingSession(
+			checkpoint_dir=FLAGS.train_dir,
+			hooks=[tf.train.StopAtStepHook(last_step=num_batches_per_epoch),
+						 _LoggerHook()],
+			config=tf.ConfigProto(
+					log_device_placement=FLAGS.log_device_placement)) as mon_sess:
+			while not mon_sess.should_stop():
+				loss_out, _ = mon_sess.run([loss, train_op])
+				if (math.isnan(loss_out)):
+					return 1e10
+				if(best_loss > loss_out):
+					best_loss = loss_out
+	return best_loss
 
 def train():
-  """Train CIFAR-10 for a number of steps."""
-  tf.reset_default_graph()
-  with tf.Graph().as_default():
-    tf.set_random_seed(SEED)
-    global_step = tf.train.get_or_create_global_step()
+	"""Train CIFAR-10 for a number of steps."""
+	#tf.reset_default_graph()
+	with tf.Graph().as_default():
+		tf.set_random_seed(SEED)
+		global_step = tf.train.get_or_create_global_step()
 
-    # Get images and labels for CIFAR-10.
-    # Force input pipeline to CPU:0 to avoid operations sometimes ending up on
-    # GPU and resulting in a slow down.
-    with tf.device('/cpu:0'):
-      images, labels = cifar10.distorted_inputs()
-    ''' chl: debug code to check if out images are deterministic
-    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)  
-    with tf.train.MonitoredTrainingSession(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
-      out_images, out_labels = sess.run([images, labels])      
-      pdb.set_trace()
-      pass
-    '''
-    # Build a Graph that computes the logits predictions from the
-    # inference model.
-    logits = cifar10.inference(images, is_train=True)
-    '''
-    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)  
-    with tf.train.MonitoredTrainingSession(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
-      out_logits = sess.run([logits])      
-      pdb.set_trace()
-      pass
-    '''
-    # Calculate loss.
-    loss = cifar10.loss(logits, labels)
+		# Get images and labels for CIFAR-10.
+		# Force input pipeline to CPU:0 to avoid operations sometimes ending up on
+		# GPU and resulting in a slow down.
+		with tf.device('/cpu:0'):
+			images, labels = cifar10.distorted_inputs()
+		''' chl: debug code to check if out images are deterministic
+		gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)  
+		with tf.train.MonitoredTrainingSession(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
+			out_images, out_labels = sess.run([images, labels])      
+			pdb.set_trace()
+			pass
+		'''
+		# Build a Graph that computes the logits predictions from the
+		# inference model.
+		logits = cifar10.inference(images, is_train=True)
+		'''
+		gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)  
+		with tf.train.MonitoredTrainingSession(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
+			out_logits = sess.run([logits])      
+			pdb.set_trace()
+			pass
+		'''
+		# Calculate loss.
+		loss = cifar10.loss(logits, labels)
 
-    # Build a Graph that trains the model with one batch of examples and
-    # updates the model parameters.
-    train_op = cifar10.train(loss, global_step)
-    class _LoggerHook(tf.train.SessionRunHook):
-      """Logs loss and runtime."""
+		# Build a Graph that trains the model with one batch of examples and
+		# updates the model parameters.
+		train_op = cifar10.train(loss, global_step)
+		class _LoggerHook(tf.train.SessionRunHook):
+			"""Logs loss and runtime."""
 
-      def begin(self):
-        self._step = -1
-        self._start_time = time.time()
+			def begin(self):
+				self._step = -1
+				self._start_time = time.time()
 
-      def before_run(self, run_context):
-        self._step += 1
-        return tf.train.SessionRunArgs(loss)  # Asks for loss value.
+			def before_run(self, run_context):
+				self._step += 1
+				return tf.train.SessionRunArgs(loss)  # Asks for loss value.
 
-      def after_run(self, run_context, run_values):
-        if self._step % FLAGS.log_frequency == 0:
-          current_time = time.time()
-          duration = current_time - self._start_time
-          self._start_time = current_time
+			def after_run(self, run_context, run_values):
+				if self._step % FLAGS.log_frequency == 0:
+					current_time = time.time()
+					duration = current_time - self._start_time
+					self._start_time = current_time
 
-          loss_value = run_values.results
-          examples_per_sec = FLAGS.log_frequency * FLAGS.batch_size / duration
-          sec_per_batch = float(duration / FLAGS.log_frequency)
+					loss_value = run_values.results
+					examples_per_sec = FLAGS.log_frequency * FLAGS.batch_size / duration
+					sec_per_batch = float(duration / FLAGS.log_frequency)
 
-          format_str = ('%s: step %d, loss = %.2f (%.1f examples/sec; %.3f '
-                        'sec/batch)')
-          print (format_str % (datetime.now(), self._step, loss_value,
-                               examples_per_sec, sec_per_batch))
-    with tf.train.MonitoredTrainingSession(
-        checkpoint_dir=FLAGS.train_dir,
-        hooks=[tf.train.StopAtStepHook(last_step=FLAGS.max_steps),
-               tf.train.NanTensorHook(loss),
-               _LoggerHook()],
-        config=tf.ConfigProto(
-            log_device_placement=FLAGS.log_device_placement)) as mon_sess:
-      while not mon_sess.should_stop():
-        mon_sess.run(train_op)
+					format_str = ('%s: step %d, loss = %.2f (%.1f examples/sec; %.3f '
+												'sec/batch)')
+					print (format_str % (datetime.now(), self._step, loss_value,
+															 examples_per_sec, sec_per_batch))
+		with tf.train.MonitoredTrainingSession(
+				checkpoint_dir=FLAGS.train_dir,
+				hooks=[tf.train.StopAtStepHook(last_step=FLAGS.max_steps),
+							 tf.train.NanTensorHook(loss),
+							 _LoggerHook()],
+				config=tf.ConfigProto(
+						log_device_placement=FLAGS.log_device_placement)) as mon_sess:
+			while not mon_sess.should_stop():
+				mon_sess.run(train_op)
 
 
 def main(argv=None):  # pylint: disable=unused-argument
-  cifar10.maybe_download_and_extract()
-  if tf.gfile.Exists(FLAGS.train_dir):
-    assert False
-    tf.gfile.DeleteRecursively(FLAGS.train_dir)
-  tf.gfile.MakeDirs(FLAGS.train_dir)
-  #train()
+	cifar10.maybe_download_and_extract()
+	if tf.gfile.Exists(FLAGS.train_dir):
+		assert False
+		tf.gfile.DeleteRecursively(FLAGS.train_dir)
+	tf.gfile.MakeDirs(FLAGS.train_dir)
+	#train()
 
-  best_lr = 1e-5
-  best_loss = 1e10
-  #for lr in [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1]:
-  for lr in [1e0, 1e0, 1e0, 1e0, 1e0, 1e0, 1e0, 1e0, 1e0, 1e0]:  
-    loss_out = train_epoch(lr)
-    if best_loss > loss_out:
-      best_loss = loss_out
-      best_lr = lr
-  cifar10.INITIAL_LEARNING_RATE = best_lr
-  print('best lr found: ',best_lr)
-  train()
+	best_lr = 1e-3
+	best_loss = 1e10
+	#'''
+	#for lr in [1e-5, 1e-5, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1]:
+	for lr in [0.1]:#, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]:  
+		print("learning rate: ", lr)
+		loss_out = train_epoch(lr)
+		loss_out = train_epoch(lr)
+		if best_loss > loss_out:
+			best_loss = loss_out
+			best_lr = lr
+	#'''
+	cifar10.INITIAL_LEARNING_RATE = best_lr
+	print('best lr found: ',best_lr)
+	train()
 
 if __name__ == '__main__':
-  tf.app.run()
+	tf.app.run()

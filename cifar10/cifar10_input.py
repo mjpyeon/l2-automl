@@ -200,8 +200,8 @@ def distorted_inputs(data_dir, batch_size):
     min_fraction_of_examples_in_queue = 0.4
     min_queue_examples = int(NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN *
                              min_fraction_of_examples_in_queue)
-    print ('Filling queue with %d CIFAR images before starting to train. '
-           'This will take a few minutes.' % min_queue_examples)
+    #print ('Filling queue with %d CIFAR images before starting to train. '
+    #       'This will take a few minutes.' % min_queue_examples)
     #gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)
     #with tf.train.MonitoredTrainingSession(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
     #  out_float_images = sess.run([float_image])      
