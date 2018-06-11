@@ -8,9 +8,9 @@ import bisect
 import pdb
 import os
 import cifar10_train1 as verifier
-tf.set_random_seed(1)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 sess = tf.Session()
+tf.set_random_seed(1)
 optimizer = tf.train.RMSPropOptimizer(learning_rate=0.0001, decay=0.9)
 writer = tf.summary.FileWriter("/tmp/{}-experiment-1".format('my_reinforce'))
 
@@ -20,7 +20,7 @@ embedding_size = 100
 MAX_LENGTH    = 5
 MAX_EPISODES = 10000
 saver_path_base = 'model/'
-saver_path = None#'model/0'
+saver_path = None#'model/450'
 
 class lstm_policy_network:
   def __init__(self):
@@ -40,8 +40,7 @@ class lstm_policy_network:
   def multiple_step(self, input):
     input = tf.expand_dims(input, 0) # [1, slen, input_dim], assume batchSize == 1
     emb = tf.squeeze(tf.nn.embedding_lookup(self.dsl_embeddings, input), 2) # [1, slen, embedding_size]
-    init_state = self.lstm_cell.zero_state(1, dtype=tf.float32)
-    outputs, final_state = self._run_rnn(emb, init_state)
+    outputs, final_state = self._run_rnn(emb, self.init_state())
     for idx in range(MAX_LENGTH):
       #output_logit = output_logit.assign(tf.zeros([1 ,sum(num_actions) + 1]))
       #output_logit = tf.Variable(tf.zeros([1 ,sum(num_actions) + 1]), name="output_logit")
@@ -49,12 +48,10 @@ class lstm_policy_network:
       final_output = tf.matmul(outputs[:,idx], self.Ws[block_idx]) + self.Bs[block_idx]
       input_start = 1 + sum(num_actions[:block_idx])
       input_end = input_start + num_actions[block_idx]
+      output_new = tf.concat([tf.constant(-np.inf, shape=[1,input_start]), final_output, tf.constant(-np.inf, shape=[1, sum(num_actions) + 1 - input_end])], 1)
       if(idx == 0):
-        output_logits = tf.concat([tf.zeros([1,input_start]), final_output, tf.zeros([1, sum(num_actions) + 1 - input_end])], 1)
-        #output_logits = output_logit[:, input_start:input_end].assign(final_output)
+        output_logits = output_new
       else:
-        #output_logits = tf.concat([output_logits, output_logit[:, input_start:input_end].assign(final_output)], 0)
-        output_new = tf.concat([tf.zeros([1,input_start]), final_output, tf.zeros([1, sum(num_actions) + 1 - input_end])], 1)
         output_logits = tf.concat([output_logits, output_new], 0)
       #print("output_logits:", output_logits)
     print(output_logits)
@@ -63,6 +60,24 @@ class lstm_policy_network:
   def init_state(self):
     return self.lstm_cell.zero_state(1, dtype=tf.float32)
 
+  # output a sequence sampled from policy
+  def sample_multiple(self, input):
+    #input = tf.expand_dims(input, 0) # [1, slen, input_dim], assume batchSize == 1
+    input_print = tf.Print(input, [input], 'input shape')
+    last_state = self.init_state()
+    for idx in range(MAX_LENGTH):
+      emb = tf.nn.embedding_lookup(self.dsl_embeddings, input_print) # [1, slen, embedding_size]
+      outputs, last_state = self._run_rnn(emb, last_state)
+      block_idx = bisect.bisect_left([1,3,4], idx % 5)
+      final_output = tf.matmul(outputs[:,0], self.Ws[block_idx]) + self.Bs[block_idx]
+      predicted_action = tf.multinomial(final_output, 1)[:,0]
+      input_print = tf.expand_dims(predicted_action, 0)
+      if idx == 0:
+        predicted_actions = tf.Print(predicted_action, [predicted_action], 'predicted_action:')
+      else:
+        predicted_actions = tf.concat([predicted_actions, predicted_action],0)
+    return predicted_actions
+  '''
   def step(self, input, idx, block_idx, hidden):
     #idx = tf.Print(idx, [idx, block_idx], 'step idx/block_idx:', summarize=20)
     input = tf.expand_dims(input, 0) # [1, slen, input_dim], assume batchSize == 1
@@ -79,45 +94,6 @@ class lstm_policy_network:
     #final_output = tf.Print(final_output, [tf.shape(final_output)], "step final output shape:", summarize=20)
     #final_output = tf.matmul(outputs[-1], tf.gather(self.Ws, block_idx)) + tf.gather(self.Bs, block_idx)
     return final_output, final_state
-
-
-
-  '''
-  def __call__(self, input, idx, hidden=None, multiple=False):
-    input = tf.expand_dims(input, 0) # [1, slen, input_dim], assume batchSize == 1
-    emb = tf.squeeze(tf.nn.embedding_lookup(self.dsl_embeddings, input), 2) # [1, slen, embedding_size]
-    #print(emb)
-    if idx != 0:
-      init_state = hidden
-    else:
-      init_state = self.lstm_cell.zero_state(1, dtype=tf.float32)
-    #print(init_state, emb)
-    outputs, final_state = tf.nn.dynamic_rnn(self.lstm_cell, emb, initial_state=init_state, time_major=False)
-    if not multiple:
-      # map 0,1 to 0, 2,3 to 1, 4 to 2.
-      block_idx = bisect.bisect_left([1,3,4], idx % 5)
-      final_output = tf.matmul(outputs[-1], self.Ws[block_idx]) + self.Bs[block_idx]
-      return final_output, final_state   
-    else:
-      #output_logits = tf.Variable(tf.zeros([MAX_LENGTH ,sum(num_actions) + 1]), name="output_logits")
-      #output_logit = tf.Variable(tf.zeros([1 ,sum(num_actions) + 1]), name="output_logit")
-      for idx in range(MAX_LENGTH):
-        #output_logit = output_logit.assign(tf.zeros([1 ,sum(num_actions) + 1]))
-        #output_logit = tf.Variable(tf.zeros([1 ,sum(num_actions) + 1]), name="output_logit")
-        block_idx = bisect.bisect_left([1,3,4], idx % 5)
-        final_output = tf.matmul(outputs[:,idx], self.Ws[block_idx]) + self.Bs[block_idx]
-        input_start = 1 + sum(num_actions[:block_idx])
-        input_end = input_start + num_actions[block_idx]
-        if(idx == 0):
-          output_logits = tf.concat([tf.zeros([1,input_start]), final_output, tf.zeros([1, sum(num_actions) + 1 - input_end])], 1)
-          #output_logits = output_logit[:, input_start:input_end].assign(final_output)
-        else:
-          #output_logits = tf.concat([output_logits, output_logit[:, input_start:input_end].assign(final_output)], 0)
-          output_new = tf.concat([tf.zeros([1,input_start]), final_output, tf.zeros([1, sum(num_actions) + 1 - input_end])], 1)
-          output_logits = tf.concat([output_logits, output_new], 0)
-        #print("output_logits:", output_logits)
-      print(output_logits)
-      return output_logits
   '''
 
 pg_reinforce = PolicyGradientREINFORCE(sess,
@@ -130,6 +106,14 @@ pg_reinforce = PolicyGradientREINFORCE(sess,
 
 '''
 '''
+def checkCode(code):
+  for t in range(len(code)):
+    block_idx = bisect.bisect_left([1,3,4], t % 5)
+    assert code[t] <= num_actions[block_idx]
+
+def dummyReward(code):
+  return abs((code[0] - code[1]-(code[2] - code[3])) - code[4])
+
 best_code = []
 best_reward = -100
 episode_history = deque(maxlen=100)
@@ -141,6 +125,35 @@ for i_episode in range(MAX_EPISODES):
   code = []
   input = 0
   #pdb.set_trace()
+  sequence = pg_reinforce.sampleSequence(np.array([[input]]))
+  code = sequence
+  print(code)
+  reward = -(verifier.main(None, code))
+  #reward = dummyReward(code)
+  checkCode(code)
+  for t in range(len(sequence)):
+    block_idx = bisect.bisect_left([1,3,4], t % 5)
+    action_index = sequence[t] + 1 + sum(num_actions[:block_idx])
+    if t == MAX_LENGTH - 1:
+      print("reward:", reward)
+      # if nan loss
+      #if reward == -100:
+      #  reward = -5
+      # if loss is around same with initial loss
+      #elif reward < -4.5:
+      #  reward = -4.5
+      pg_reinforce.storeRollout(input, last_action, reward)
+    else:
+      pg_reinforce.storeRollout(input, action_index, 0)
+    input = action_index
+    # if nan loss
+    if reward == -100:
+      reward = -5
+    # if loss is around same with initial loss
+    elif reward < -4.5:
+      reward = -4.5
+
+  '''
   for t in range(MAX_LENGTH):
     block_idx = bisect.bisect_left([1,3,4], t % 5)
     action = pg_reinforce.sampleAction(np.array([[input]]), t)
@@ -163,6 +176,7 @@ for i_episode in range(MAX_EPISODES):
         reward = -4.5
       pg_reinforce.storeRollout(input, last_action, reward)
     input = last_action
+  '''
   pg_reinforce.updateModel()
   episode_history.append(reward)
   mean_rewards = np.mean(episode_history)

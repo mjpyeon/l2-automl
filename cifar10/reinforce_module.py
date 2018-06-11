@@ -1,4 +1,5 @@
 import random
+random.seed(9001)
 import numpy as np
 import tensorflow as tf
 import bisect
@@ -21,6 +22,7 @@ class PolicyGradientREINFORCE(object):
                      summary_every=100):
 
     # tensorflow machinery
+    tf.set_random_seed(1)
     self.session        = session
     self.optimizer      = optimizer
     self.summary_writer = summary_writer
@@ -92,21 +94,22 @@ class PolicyGradientREINFORCE(object):
       self.block_idx = tf.placeholder(tf.int32, 1, name="block_idx")
       #self.hidden = tf.placeholder(tf.float32, (None, self.lstm_hidden), name='hidden')
       #self.idx = 0
-      self.hidden = self.policy_network.init_state()
+      #self.hidden = self.policy_network.init_state()
     # rollout action based on current policy
     with tf.name_scope("predict_actions"):
       # initialize policy network
       with tf.variable_scope("policy_network"):
-        self.policy_outputs = self.policy_network.step(self.input, self.idx, self.block_idx, self.hidden)
+        self.predicted_sequence = self.policy_network.sample_multiple(self.input)
+        #self.policy_outputs = self.policy_network.step(self.input, self.idx, self.block_idx, self.hidden)
 
 
       # predict actions from policy network
-      self.action_scores = tf.identity(self.policy_outputs[0], name="action_scores")
+      #self.action_scores = tf.identity(self.policy_outputs[0], name="action_scores")
       #self.action_scores = tf.Print(self.action_scores, [self.action_scores, self.idx], "action_scores: ", summarize=30)
-      self.hidden = self.policy_outputs[1]
+      #self.hidden = self.policy_outputs[1]
       # Note 1: tf.multinomial is not good enough to use yet
       # so we don't use self.predicted_actions for now
-      self.predicted_actions = tf.multinomial(self.action_scores, 1)
+      #self.predicted_actions = tf.multinomial(self.action_scores, 1)
 
     # regularization loss
     policy_network_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="policy_network")
@@ -158,7 +161,9 @@ class PolicyGradientREINFORCE(object):
     block_idx = bisect.bisect_left([1,3,4], idx % 5)
     return random.randint(0, block_range[block_idx])
 
-
+  def sampleSequence(self, input):
+    predicted_sequence = self.session.run(self.predicted_sequence, {self.input: input})
+    return predicted_sequence
 
   def sampleAction(self, input, idx):
     # TODO: use this code piece when tf.multinomial gets better
@@ -172,15 +177,18 @@ class PolicyGradientREINFORCE(object):
       maxy = np.amax(y)
       e = np.exp(y - maxy)
       return e / np.sum(e)
-    # epsilon-greedy exploration strategy
-    if False and random.random() < self.exploration:
-      return random.randint(0, self.num_actions[idx]-1)
-    else:
-      block_idx = bisect.bisect_left([1,3,4], idx % 5)
-      action_scores = self.session.run(self.action_scores, {self.input: input, self.idx:[idx], self.block_idx: [block_idx]})[0]
+
+    block_idx = bisect.bisect_left([1,3,4], idx % 5)
+    all_action_scores = self.session.run(self.all_action_scores, {self.input: input, self.idx:[idx], self.block_idx: [block_idx]})[0]
+    sequence = []
+    for action_scores in all_action_scores:
       action_probs  = softmax(action_scores) - 1e-5
       action = np.argmax(np.random.multinomial(1, action_probs))
-      return action
+      # epsilon-greedy exploration strategy
+      if random.random() < self.exploration:
+        action = random.randint(0, self.num_actions[idx]-1)
+      sequence += [action]
+    return sequence
 
   def updateModel(self):
 
