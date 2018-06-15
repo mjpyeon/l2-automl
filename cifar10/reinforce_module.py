@@ -210,7 +210,7 @@ class PolicyGradientREINFORCE(object):
     self.all_rewards += [self.reward_buffer[-1]]
     self.all_rewards = self.all_rewards[-self.max_reward_length:]
     #print self.all_rewards
-    discounted_rewards -= np.mean(self.all_rewards)
+    #discounted_rewards -= np.mean(self.all_rewards)
     #discounted_rewards /= (np.std(self.all_rewards) + 1)
 
     # whether to calculate summaries

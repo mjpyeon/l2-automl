@@ -189,18 +189,18 @@ def main(argv=None, optimizer_code=None):  # pylint: disable=unused-argument
   #'''
   for lr in [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1]:
   #for lr in [1e-1, 1e-1, 1e-1, 1e-1, 1e-1, 1e0, 1e0, 1e0, 1e0, 1e0]:  
-    print("learning rate: ", lr)
-    loss_out = train_epoch(optimizer_code, lr, log=True)
+    #print("learning rate: ", lr)
+    loss_out = train_epoch(optimizer_code, lr, log=False)
     if best_loss > loss_out:
       best_loss = loss_out
       best_lr = lr
   #'''
   cifar10.INITIAL_LEARNING_RATE = best_lr
-  print('best lr found {}, best loss: {}'.format(best_lr, best_loss))
+  print('best lr found {}, best 1 epoch loss: {}'.format(best_lr, best_loss))
   if best_loss > 4.6:
     return best_loss
   else:
-    return train_epoch(optimizer_code, best_lr, True)
+    return train_epoch(optimizer_code, best_lr, False)
 
 if __name__ == '__main__':
   tf.app.run()
