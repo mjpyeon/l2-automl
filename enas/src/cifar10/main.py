@@ -201,8 +201,14 @@ def get_ops(images, labels):
     "num_train_batches": child_model.num_train_batches,
   }
 
+  child_placeholder = {
+    "lr":child_model.lr,
+    "optimizer_code":child_model.optimizer_code
+  }
+
   ops = {
     "child": child_ops,
+    "child_placeholder":child_placeholder,
     "controller": controller_ops,
     "eval_every": child_model.num_train_batches * FLAGS.eval_every_epochs,
     "eval_func": child_model.eval_once,
@@ -222,6 +228,7 @@ def train():
   with g.as_default():
     ops = get_ops(images, labels)
     child_ops = ops["child"]
+    child_placeholder = ops['child_placeholder']
     controller_ops = ops["controller"]
 
     saver = tf.train.Saver(max_to_keep=2)
@@ -250,7 +257,7 @@ def train():
             child_ops["train_acc"],
             child_ops["train_op"],
           ]
-          loss, lr, gn, tr_acc, _ = sess.run(run_ops)
+          loss, lr, gn, tr_acc, _ = sess.run(run_ops, {child_placeholder['lr']:0.1, child_placeholder['optimizer_code']:[15,0,0,0,5]})
           global_step = sess.run(child_ops["global_step"])
 
           if FLAGS.child_sync_replicas:

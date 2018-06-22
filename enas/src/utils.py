@@ -5,8 +5,8 @@ from __future__ import print_function
 import sys
 import numpy as np
 import tensorflow as tf
-
-
+import src.custom_optimizer as cto
+import pdb
 user_flags = []
 
 
@@ -82,6 +82,41 @@ def count_model_params(tf_variables):
     num_vars += np.prod([dim.value for dim in var.get_shape()])
   return num_vars
 
+def get_train_ops_with_optimizer(
+    optimizer_code,
+    lr,
+    loss, 
+    tf_variables,
+    train_step, 
+    lr_dec_every=10000,
+    lr_dec_rate=0.1,
+    sync_replicas=False,
+    num_aggregate=None,
+    num_replicas=None,
+    get_grad_norms=False):
+  lr_decay = tf.train.exponential_decay(
+      lr, train_step, lr_dec_every,
+      lr_dec_rate, staircase=True)
+  opt = cto.CustomOptimizer(lr_decay, optimizer_code)
+  if sync_replicas:
+    assert num_aggregate is not None, "Need num_aggregate to sync."
+    assert num_replicas is not None, "Need num_replicas to sync."
+
+    opt = tf.train.SyncReplicasOptimizer(
+      opt,
+      replicas_to_aggregate=num_aggregate,
+      total_num_replicas=num_replicas,
+      use_locking=True)
+
+  #grads = opt.compute_gradients(loss, tf_variables)
+  grads = tf.gradients(loss, tf_variables)
+  #print(grads)
+  #pdb.set_trace()
+  train_op = opt.apply_gradients(zip(grads, tf_variables), global_step=train_step)
+  grad_norm = tf.global_norm(grads)
+
+  #train_op = opt.minimize(loss, var_list=tf_variables)
+  return train_op, grad_norm, opt
 
 def get_train_ops(
     loss,
@@ -124,7 +159,8 @@ def get_train_ops(
 
   grads = tf.gradients(loss, tf_variables)
   grad_norm = tf.global_norm(grads)
-
+  #print(grads)
+  #pdb.set_trace()
   grad_norms = {}
   for v, g in zip(tf_variables, grads):
     if v is None or g is None:

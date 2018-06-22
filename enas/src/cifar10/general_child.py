@@ -16,9 +16,9 @@ from src.cifar10.image_ops import batch_norm_with_mask
 from src.cifar10.image_ops import relu
 from src.cifar10.image_ops import max_pool
 from src.cifar10.image_ops import global_avg_pool
-
+import src.custom_optimizer as cto
 from src.utils import count_model_params
-from src.utils import get_train_ops
+from src.utils import get_train_ops, get_train_ops_with_optimizer
 from src.common_ops import create_weight
 
 
@@ -610,6 +610,21 @@ class GeneralChild(Model):
 
     self.global_step = tf.Variable(
       0, dtype=tf.int32, trainable=False, name="global_step")
+    #'''
+    self.lr = tf.placeholder(tf.float32)
+    self.optimizer_code = tf.placeholder(tf.int32)
+    self.train_op, self.grad_norm, self.optimizer = get_train_ops_with_optimizer(
+      self.optimizer_code,
+      self.lr,
+      self.loss,
+      tf_variables,
+      self.global_step,
+      lr_dec_every=self.lr_dec_every,
+      lr_dec_rate=self.lr_dec_rate,
+      sync_replicas=self.sync_replicas,
+      num_aggregate=self.num_aggregate,
+      num_replicas=self.num_replicas)
+    '''
     self.train_op, self.lr, self.grad_norm, self.optimizer = get_train_ops(
       self.loss,
       tf_variables,
@@ -631,7 +646,7 @@ class GeneralChild(Model):
       sync_replicas=self.sync_replicas,
       num_aggregate=self.num_aggregate,
       num_replicas=self.num_replicas)
-
+    '''
   # override
   def _build_valid(self):
     if self.x_valid is not None:
