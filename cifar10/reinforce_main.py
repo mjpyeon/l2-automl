@@ -7,7 +7,7 @@ import numpy as np
 import bisect
 import pdb
 import os
-import cifar10_train1 as verifier
+import cifar10_train as verifier
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 sess = tf.Session()
 tf.set_random_seed(1)
@@ -199,8 +199,8 @@ if __name__ == '__main__':
     code = sequence
     log_buffer += str(code)+'\n'
     #print(code)
-    #reward = -(verifier.main(None, code))
-    reward = dummyReward(code)
+    reward = -(verifier.main(None, code))
+    #reward = dummyReward(code)
     checkCode(code)
     for t in range(len(sequence)):
       block_idx = bisect.bisect_left([1,3,4], t % 5)
@@ -255,8 +255,8 @@ if __name__ == '__main__':
     if reward > best_reward:
           best_code = code
           best_reward = reward
-    #if i_episode % 100 == 0:
-    #  pg_reinforce.save_model(saver_path_base+str(i_episode))
+    if i_episode % 100 == 0:
+      pg_reinforce.save_model(saver_path_base+str(i_episode))
     if i_episode % 100 == 0:
       print(log_buffer)
       if i_episode % 10 == 0:

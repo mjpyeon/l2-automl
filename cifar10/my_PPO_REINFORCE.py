@@ -17,7 +17,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import bisect
 from collections import deque
-import cifar10_train1 as verifier
+import cifar10_train as verifier
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 

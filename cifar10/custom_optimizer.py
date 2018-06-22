@@ -43,6 +43,24 @@ class CustomOptimizer(optimizer.Optimizer):
 			self._zeros_slot(v, "r", self._name)
 			self._zeros_slot(v, "rmsprop_v", self._name)
 
+	def tf_unary(self, x, key):
+		epsilon_t = math_ops.cast(self._epsilon_t, x.dtype.base_dtype)
+		unary = tf.case({
+			tf.equal(key,0):lambda: x,
+			tf.equal(key,1):lambda: -x,
+			tf.equal(key,2):lambda: tf.exp(x),
+			tf.equal(key,3):lambda: tf.log(tf.abs(x) + epsilon_t),
+			tf.equal(key,4):lambda: tf.sqrt(tf.abs(x) + epsilon_t),
+			tf.equal(key,5):lambda: tf.clip_by_value(x, -1e-5, 1e-5),
+			tf.equal(key,6):lambda: tf.clip_by_value(x, -1e-4, 1e-4),
+			tf.equal(key,7):lambda: tf.clip_by_value(x, -1e-3, 1e-3),
+			tf.equal(key,8):lambda: tf.cond(tf.equal(tf.multinomial(tf.log([[1.0, 9.0]]), 1)[0][0], 0), lambda:tf.zeros(tf.shape(x)), lambda:x),
+			tf.equal(key,9):lambda: tf.cond(tf.equal(tf.multinomial(tf.log([[3.0, 7.0]]), 1)[0][0], 0), lambda:tf.zeros(tf.shape(x)), lambda:x),
+			tf.equal(key,10):lambda: tf.cond(tf.equal(tf.multinomial(tf.log([[5.0, 5.0]]), 1)[0][0], 0), lambda:tf.zeros(tf.shape(x)), lambda:x),
+			tf.equal(key,11):lambda: tf.sign(x)
+		}, default=lambda:x, exclusive=True)
+		return unary
+
 	def unary(self, var, key):
 		epsilon_t = math_ops.cast(self._epsilon_t, var.dtype.base_dtype)
 		unary_opts = {
@@ -60,6 +78,18 @@ class CustomOptimizer(optimizer.Optimizer):
 			11:lambda x: tf.sign(x)
 		}
 		return unary_opts[key](var)
+
+	def tf_binary(self, x, y, key):
+		delta = 1e-8
+		binary = tf.case({
+			tf.equal(key,0):lambda: x + y,
+			tf.equal(key,1):lambda: x - y,
+			tf.equal(key,2):lambda: x * y,
+			tf.equal(key,3):lambda: x / (y + delta),
+			tf.equal(key,4):lambda: tf.pow(x, y),
+			tf.equal(key,5):lambda: x
+		}, default=lambda:x, exclusive=True)
+		return binary
 
 	def binary(self, var1, var2, key):
 		delta = 1e-8
@@ -104,6 +134,25 @@ class CustomOptimizer(optimizer.Optimizer):
 		m_t_hat = m_t / (1 - beta1_t)
 		v_t_hat = v_t / (1 - beta2_t)
 		adam =  m_t_hat / (math_ops.sqrt(v_t_hat) + epsilon_t)
+		operands_list = [
+			grad,
+			grad2,
+			grad3,
+			m_t,
+			v_t,
+			r_t,
+			tf.sign(grad),
+			tf.sign(m_t),
+			tf.constant(1.0, shape=grad.get_shape().as_list()),
+			tf.constant(2.0, shape=grad.get_shape().as_list()),
+			tf.fill(tf.shape(grad), epsilon_t),
+			1e-4*var,
+			1e-3*var,
+			1e-2*var,
+			1e-1*var,
+			adam,
+			rmsprop
+		]
 		operands = {
 			0: grad,
 			1: grad2,
@@ -114,7 +163,7 @@ class CustomOptimizer(optimizer.Optimizer):
 			6: tf.sign(grad),
 			7: tf.sign(m_t),
 			8: tf.constant(1.0, shape=grad.get_shape().as_list()),
-			9: tf.constant(1.0, shape=grad.get_shape().as_list()),
+			9: tf.constant(2.0, shape=grad.get_shape().as_list()),
 			10: tf.fill(tf.shape(grad), epsilon_t),
 			11: 1e-4*var,
 			12: 1e-3*var,
@@ -140,8 +189,28 @@ class CustomOptimizer(optimizer.Optimizer):
 				binary1 = self.binary(unary1, unary2, code[4])
 				result = binary1
 			return result
-
-		result = decipher(self._code)
+		def tf_decipher(code):
+			def _length5(): 
+				operand1 = tf.gather(operands_list, code[0])
+				#print('operand1', operand1)
+				operand2 = tf.gather(operands_list, code[1])
+				#print('operand2', operand2)
+				unary1 = self.tf_unary(operand1, code[2])
+				#print('unary1', unary1)
+				unary2 = self.tf_unary(operand2, code[3])
+				#print('unary2', unary2)
+				binary1 = self.tf_binary(unary1, unary2, code[4])
+				#print('binary1', binary1)
+				return binary1
+			def _length2():
+				operand1 = tf.gather(operands_list, code[0])
+				unary1 = self.tf_unary(operand1, code[1])
+				return unary1
+			return _length5()
+			#return tf.case({tf.equal(tf.size(code), 5):_length5, tf.equal(tf.size(code), 2):_length2}, default=_length5, exclusive=True)
+		#result = decipher(self._code)
+		result = tf_decipher(self._code)
+		#print result
 
 		var_update = state_ops.assign_sub(var, lr_t * result, use_locking=self._use_locking)
 		#var_update = state_ops.assign_sub(var, operands[17], use_locking=self._use_locking)

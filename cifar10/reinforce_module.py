@@ -55,14 +55,17 @@ class PolicyGradientREINFORCE(object):
     self.all_rewards = []
     self.max_reward_length = 50#1000000
 
-    self.saver = tf.train.Saver()
     # create and initialize variables
     self.create_variables()
     var_lists = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
-    self.session.run(tf.variables_initializer(var_lists))
+
+    self.saver = tf.train.Saver()
+
     if saver_path is not None:
       print("load from", saver_path)
       self.saver.restore(self.session, saver_path)
+    else:
+      self.session.run(tf.variables_initializer(var_lists))
 
     # make sure all variables are initialized
     self.session.run(tf.assert_variables_initialized())
@@ -128,7 +131,7 @@ class PolicyGradientREINFORCE(object):
       self.cross_entropy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logprobs, labels=self.taken_actions)
       self.pg_loss            = tf.reduce_mean(self.cross_entropy_loss)
       self.reg_loss           = tf.reduce_sum([tf.reduce_sum(tf.square(x)) for x in policy_network_variables])
-      self.loss               = self.pg_loss + self.reg_param * self.reg_loss
+      self.loss               = self.pg_loss #+ self.reg_param * self.reg_loss
 
       # compute gradients
       self.gradients = self.optimizer.compute_gradients(self.loss)
