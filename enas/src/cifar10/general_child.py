@@ -613,7 +613,6 @@ class GeneralChild(Model):
       0, dtype=tf.int32, trainable=False, name="global_step")
     #'''
     self.lr = tf.placeholder(tf.float32)
-    self.optimizer_code = tf.placeholder(tf.int32)
     self.train_op, self.grad_norm, self.optimizer = get_train_ops_with_optimizer(
       self.optimizer_code,
       self.lr,
@@ -625,6 +624,8 @@ class GeneralChild(Model):
       sync_replicas=self.sync_replicas,
       num_aggregate=self.num_aggregate,
       num_replicas=self.num_replicas)
+    tf_variables.append(self.global_step)
+    self.saver = tf.train.Saver(tf_variables)
     '''
     self.train_op, self.lr, self.grad_norm, self.optimizer = get_train_ops(
       self.loss,
@@ -711,9 +712,19 @@ class GeneralChild(Model):
     self.valid_shuffle_acc = tf.to_int32(self.valid_shuffle_acc)
     self.valid_shuffle_acc = tf.reduce_sum(self.valid_shuffle_acc)
 
+  def connect_optimizer(self, optimizer_controller):
+    self.sample_opt_op = optimizer_controller.sample_opt_op()
+    self.use_opt_code_feed = tf.placeholder_with_default(tf.constant(0), shape=None)
+    self.optimizer_code_feed = tf.placeholder_with_default(tf.constant([15,0,0,0,5], dtype=tf.int64), shape=None)
+    #tf.placeholder(tf.int64)
+    self.optimizer_code = tf.cond(tf.equal(self.use_opt_code_feed, 1), lambda: self.optimizer_code_feed, lambda:self.sample_opt_op)
+
   def connect_controller(self, controller_model):
+    self.use_feed_arc = tf.placeholder_with_default(tf.constant(0), shape=None)
+    self.feed_arc = tf.placeholder_with_default(tf.constant([1,2]), shape=None)
+    #tf.placeholder(tf.int32)
     if self.fixed_arc is None:
-      self.sample_arc = controller_model.sample_arc
+      self.sample_arc = tf.cond(tf.equal(self.use_feed_arc, 0), lambda:controller_model.sample_arc, lambda:self.feed_arc)
     else:
       fixed_arc = np.array([int(x) for x in self.fixed_arc.split(" ") if x])
       self.sample_arc = fixed_arc
