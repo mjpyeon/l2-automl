@@ -23,14 +23,16 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 EP_LEN = 1
 EP_MAX = 30000
-A_LR = 0.0001
+A_LR = 0.001
 A_DIM = 5
-A_UPDATE_STEPS = 10
+A_UPDATE_STEPS = 1
+MAX_LENGTH = 5
+num_actions = [17,12,6]
 #OLD_UPDATE_STEPS = 5
 METHOD = dict(name='clip', epsilon=0.2)
-SAVE_PATH='Saved_REINFORCE/cifar10_'
+SAVE_PATH='Saved_PPO/cifar10_REINFORCE_'
 LOAD_PATH=''#Saved_PPO/Dummy_step_200_avgR_7.6'
-print('EP_LEN',EP_LEN,', EP_MAX',EP_MAX, 'A_UPDATE_STEPS', A_UPDATE_STEPS)
+print('EP_LEN',EP_LEN,', EP_MAX',EP_MAX, 'A_UPDATE_STEPS', A_UPDATE_STEPS, 'A_LR', A_LR)
 '''
 import tensorflow as tf
 class Object(object):
@@ -55,10 +57,10 @@ class PPO(object):
 			self.advantage = self.tf_r - self.moving_average
 		# actor
 		new_policy = lstm_policy_network('new_policy', True)
-		old_policy = lstm_policy_network('old_policy', False)
+		#old_policy = lstm_policy_network('old_policy', False)
 		
 		self.sample_op = new_policy.sample_sequence()
-		self.old_sample_op = old_policy.sample_sequence()
+		#self.old_sample_op = old_policy.sample_sequence()
 		self.target_gather = tf.placeholder(tf.int32, [None,A_DIM,2])
 		self.batch_size = tf.placeholder(tf.int32, [])
 		self.tfa = tf.placeholder(tf.int32, [None, A_DIM], 'action')
@@ -75,8 +77,8 @@ class PPO(object):
 				#	tf.clip_by_value(ratio, 1.-METHOD['epsilon'], 1.+METHOD['epsilon'])*self.tfadv))
 				self.aloss = -tf.reduce_mean(surr)
 		new_policy_params  = new_policy.get_parameters()
-		old_policy_params = old_policy.get_parameters()
-		self.update_old_policy_op = [oldp.assign(p) for p, oldp in zip(new_policy_params, old_policy_params)]
+		#old_policy_params = old_policy.get_parameters()
+		#self.update_old_policy_op = [oldp.assign(p) for p, oldp in zip(new_policy_params, old_policy_params)]
 
 		with tf.variable_scope('atrain'):
 			self.atrain_op = tf.train.AdamOptimizer(A_LR).minimize(self.aloss, var_list=new_policy_params)
@@ -94,10 +96,14 @@ class PPO(object):
 		batch_size = len(a)
 		a_1 = np.repeat(np.array([i for i in range(batch_size)])[:,None], A_DIM, axis=1)
 		a_gather_ = np.concatenate((np.expand_dims(a_1, axis=2), np.expand_dims(a, axis=2)), axis=2)
-
+		
+		for idx in range(MAX_LENGTH):
+			block_idx = bisect.bisect_left([1,3,4], idx % 5)
+		  	a[:,idx] += sum(num_actions[:block_idx])
+		
 		# r: float, a: [batch_size, slen]
 		#if step % OLD_UPDATE_STEPS == 0:
-		self.sess.run(self.update_old_policy_op)
+		#self.sess.run(self.update_old_policy_op)
 		adv = self.sess.run(self.advantage, {self.tf_r: r})
 		#print("advantage: ", adv)
 		# adv = (adv - adv.mean())/(adv.std()+1e-6)     # sometimes helpful
@@ -164,17 +170,14 @@ class lstm_policy_network_test:
 		def sample_seq_test(self):
 			return self.sess.run(self.sample_seq_op)
 
-MAX_LENGTH = 5
 class lstm_policy_network:
 	def __init__(self, scope, trainable):
 		n_hidden_units = 150
-		num_actions = [17,12,6]
 		embedding_size = 100
-		MAX_LENGTH    = 5
 		self.epsilon = 1e-8
 		# Assume default first input '0'
 		#self.start_input = tf.zeros([1,1], tf.int32)
-		self.start_input = 0
+		self.start_input = sum(num_actions)
 		self.scope = scope
 		self.trainable = trainable
 		# 0:<s>, 1-17:operand_idx, 18-29:unary_idx, 30-35:binary_idx
@@ -234,6 +237,8 @@ class lstm_policy_network:
 		input = tf.constant(self.start_input, shape=[1,1], dtype=tf.int32)
 		last_state = self.init_state(1)
 		for idx in range(MAX_LENGTH):
+		  block_idx = bisect.bisect_left([1,3,4], idx % 5)
+		  input = input + sum(num_actions[:block_idx]) # make input globally indexed
 		  emb = tf.nn.embedding_lookup(self.dsl_embeddings, input) # [1, slen, embedding_size]
 		  outputs, last_state = self._run_rnn(emb, last_state)
 		  final_output = tf.matmul(outputs[:,0], self.Ws[idx]) + self.Bs[idx]
@@ -258,8 +263,8 @@ if __name__ == '__main__':
 		buffer_sequences, buffer_reward = [], []
 		for t in range(EP_LEN):
 			sampled_sequence = ppo.choose_sequence()
-			#reward = dummyReward(sampled_sequence)
-			
+			reward = dummyReward(sampled_sequence)
+			'''
 			reward = -(verifier.main(None, sampled_sequence))
 			# if nan loss
 			if reward == -100:
@@ -267,7 +272,7 @@ if __name__ == '__main__':
 			# if loss is around same with initial loss
 			elif reward < -4.5:
 				reward = -4.5
-
+			'''
 			buffer_sequences.append(sampled_sequence)
 			buffer_reward.append(reward)
 			if t == EP_LEN - 1:
@@ -290,7 +295,7 @@ if __name__ == '__main__':
 			print("Average reward for last 100 episodes: {:.2f}".format(mean_rewards))
 			if global_idx % 10 == 0:
 				print("Best code {} / rewards {}".format(', '.join([str(c) for c in best_code]), best_reward))
-			if global_idx % 100 == 0:
-				ppo.save(global_idx, mean_rewards)
+			#if global_idx % 100 == 0:
+			#	ppo.save(global_idx, mean_rewards)
 
 		global_idx += 1

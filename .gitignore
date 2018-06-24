@@ -1,8 +1,7 @@
-cifar10/cifar10_*
+#cifar10/*/*
 learning-to-learn/mnist
 learning-to-learn/MNIST-data
 learning-to-learn/cifar
 learning-to-learn/cifar10
 enas/outputs*
 enas/data
-!*.py

@@ -266,7 +266,7 @@ def train():
       config=config, hooks=hooks, checkpoint_dir=FLAGS.output_dir) as sess:
         #print("graph size:", sess.graph_def.ByteSize())
         #pdb.set_trace()
-        
+        saver.restore(get_session(sess), 'enaos_outputs/model.ckpt')
         def verifier(feed_arc, feed_optimizer_code):
           child_save_path = child_saver.save(get_session(sess), FLAGS.output_dir+'/child_model.ckpt')
           best_reward, best_lr = -1e8, 0
@@ -287,7 +287,7 @@ def train():
                                                       child_placeholder['use_feed_arc']:1,
                                                       child_placeholder['feed_arc']:feed_arc
                                                       })
-              print("verifier loss:", loss)
+              #print("verifier loss:", loss)
             total_acc = []
             # get acc
             for b in range(ops['num_valid_batches']):
@@ -312,12 +312,14 @@ def train():
           for b in range(ops['num_valid_batches']):
             acc = sess.run(child_ops['valid_acc']) / float(child_ops['eval_batch_size'])
             total_acc += [acc]
+          child_saver.restore(get_session(sess), child_save_path)
           reward = sum(total_acc) / len(total_acc)
           return reward
 
         print("Starting session")
         start_time = time.time()
         while True:
+          #pdb.set_trace()
           opt_controller.train(verifier, sess)
           run_ops = [
             child_ops["loss"],
@@ -424,10 +426,10 @@ def main(_):
     shutil.rmtree(FLAGS.output_dir)
     os.makedirs(FLAGS.output_dir)
 
-  print("-" * 80)
-  log_file = os.path.join(FLAGS.output_dir, "stdout")
-  print("Logging to {}".format(log_file))
-  sys.stdout = Logger(log_file)
+  #print("-" * 80)
+  #log_file = os.path.join(FLAGS.output_dir, "stdout")
+  #print("Logging to {}".format(log_file))
+  #sys.stdout = Logger(log_file)
 
   utils.print_user_flags()
   train()

@@ -299,9 +299,8 @@ class train_optimizer_controller():
 					self.ppo.update(batch_sequences, batch_rewards, ep, input_codes, sess)
 				self.episode_history.append(reward)
 				mean_rewards = np.mean(self.episode_history)
-				if reward > best_reward:
+				if reward > self.best_reward:
 					self.best_code = sampled_sequence
-					self.best_score = score
 					self.best_reward = reward
 			if self.global_idx % 10 == 0: 
 				print(
