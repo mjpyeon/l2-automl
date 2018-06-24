@@ -33,6 +33,7 @@ FLAGS = flags.FLAGS
 DEFINE_boolean("reset_output_dir", False, "Delete output_dir if exists.")
 DEFINE_string("data_path", "", "")
 DEFINE_string("output_dir", "", "")
+DEFINE_string("saved_path", "", "")
 DEFINE_string("data_format", "NHWC", "'NHWC' or 'NCWH'")
 DEFINE_string("search_for", None, "Must be [macro|micro]")
 
@@ -266,7 +267,8 @@ def train():
       config=config, hooks=hooks, checkpoint_dir=FLAGS.output_dir) as sess:
         #print("graph size:", sess.graph_def.ByteSize())
         #pdb.set_trace()
-        saver.restore(get_session(sess), 'enaos_outputs/model.ckpt')
+        #if FLAGS.saved_path != '':
+        #  saver.restore(get_session(sess), saved_path)#enaos_outputs/model.ckpt-292161')
         def verifier(feed_arc, feed_optimizer_code):
           child_save_path = child_saver.save(get_session(sess), FLAGS.output_dir+'/child_model.ckpt')
           best_reward, best_lr = -1e8, 0

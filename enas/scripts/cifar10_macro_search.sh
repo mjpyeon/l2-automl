@@ -8,6 +8,7 @@ python src/cifar10/main.py \
   --reset_output_dir \
   --data_path="data/cifar10" \
   --output_dir="enaos_outputs_1" \
+  --saved_path='' \
   --batch_size=128 \
   --num_epochs=310 \
   --log_every=50 \
