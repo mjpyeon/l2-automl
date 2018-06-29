@@ -260,13 +260,14 @@ class lstm_policy_network:
 		last_state = encoder_states
 		#last_state = self.init_state(1)
 		for idx in range(MAX_LENGTH):
-		  block_idx = bisect.bisect_left([1,3,4], idx % 5)
-		  input = input + sum(num_actions[:block_idx]) # make input globally indexed
+		  if(idx > 0):
+		  	block_idx = bisect.bisect_left([1,3,4], (idx - 1) % 5)
+		  	input = input + sum(num_actions[:block_idx]) # make input globally indexed
 		  emb = tf.nn.embedding_lookup(self.dsl_embeddings, input) # [batch_size, 1, embedding_size]
 		  outputs, last_state = self._run_rnn(self.lstm_cell, emb, last_state,'decoder')
 		  final_output = tf.matmul(outputs[:,0], self.Ws[idx]) + self.Bs[idx]
 		  predicted_action = tf.multinomial(final_output, 1)
-		  #input = tf.expand_dims(predicted_action, 1)
+		  input = predicted_action
 		  if idx == 0:
 			predicted_actions = predicted_action
 		  else:
@@ -302,43 +303,6 @@ def sample_input_codes():
 		for j in range(i):
 			seq += [rand2()]
 	return seq
-
-class train_optimizer_controller():
-	def __init__(self):
-		self.ppo = PPO()
-		self.reset()
-	def reset(self):
-		self.best_code = []
-		self.best_score = 0
-		self.best_reward = -100
-		self.episode_history = deque(maxlen=100)
-		self.global_idx = 0
-
-	def train(self, verifier):
-		for ep in range(EP_MAX):
-			buffer_sequences, buffer_reward = [], []
-			input_codes = []
-			for t in range(EP_LEN):
-				input_codes += [sample_input_codes()]
-			sampled_sequences = ppo.choose_sequence(input_codes)
-			for t in range(EP_LEN):
-				score = dummyInputScore(input_codes[t])
-				sampled_sequence = sampled_sequences[t]
-				reward = dummyRewardWInput(sampled_sequence, score)
-				buffer_sequences.append(sampled_sequence)
-				buffer_reward.append(reward)
-				if t == EP_LEN - 1:
-					#pdb.set_trace()
-					batch_sequences, batch_rewards = np.vstack(buffer_sequences), np.vstack(buffer_reward)
-					input_codes = np.array(input_codes)
-					buffer_sequences, buffer_reward = [], []
-					ppo.update(batch_sequences, batch_rewards, ep, input_codes)
-				episode_history.append(reward)
-				mean_rewards = np.mean(episode_history)
-				if reward > best_reward:
-					best_code = sampled_sequence
-					best_score = score
-					best_reward = reward
 
 
 if __name__ == '__main__':

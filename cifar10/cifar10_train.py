@@ -179,7 +179,7 @@ def train():
 
 
 def main(argv=None, optimizer_code=None):  # pylint: disable=unused-argument
-  #optimizer_code = [15,0,7,0,0]#[6,15,0,9,0]
+  optimizer_code = [15,9,8,6,0]#[6,15,0,9,0]
   print(optimizer_code)
   cifar10.maybe_download_and_extract()
   if tf.gfile.Exists(FLAGS.train_dir):

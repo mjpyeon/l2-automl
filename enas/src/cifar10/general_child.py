@@ -189,16 +189,23 @@ class GeneralChild(Model):
     else:
       raise ValueError("Unknown data_format '{0}'".format(self.data_format))
 
-  def _model(self, images, is_training, reuse=False):
+  def _model(self, images, is_training, reuse=False, is_valid=False):
     with tf.variable_scope(self.name, reuse=reuse):
       layers = []
-
+      if(is_valid):
+        self.valid_layers = []
       out_filters = self.out_filters
       with tf.variable_scope("stem_conv"):
         w = create_weight("w", [3, 3, 3, out_filters])
+        if(is_valid):
+            self.valid_layers.append(images)
         x = tf.nn.conv2d(images, w, [1, 1, 1, 1], "SAME", data_format=self.data_format)
+        if(is_valid):
+            self.valid_layers.append(x)
         x = batch_norm(x, is_training, data_format=self.data_format)
         layers.append(x)
+        if(is_valid):
+            self.valid_layers.append(x)
 
       if self.whole_channels:
         start_idx = 0
@@ -211,6 +218,8 @@ class GeneralChild(Model):
           else:
             x = self._fixed_layer(layer_id, layers, start_idx, out_filters, is_training)
           layers.append(x)
+          if(is_valid):
+            self.valid_layers.append(x)
           if layer_id in self.pool_layers:
             if self.fixed_arc is not None:
               out_filters *= 2
@@ -222,6 +231,8 @@ class GeneralChild(Model):
                     layer, out_filters, 2, is_training)
                 pooled_layers.append(x)
               layers = pooled_layers
+              if(is_valid):
+                self.valid_layers.extend(pooled_layers)
         if self.whole_channels:
           start_idx += 1 + layer_id
         else:
@@ -229,6 +240,8 @@ class GeneralChild(Model):
         print(layers[-1])
 
       x = global_avg_pool(x, data_format=self.data_format)
+      if(is_valid):
+        self.valid_layers.append(x)
       if is_training:
         x = tf.nn.dropout(x, self.keep_prob)
       with tf.variable_scope("fc"):
@@ -240,6 +253,8 @@ class GeneralChild(Model):
           raise ValueError("Unknown data_format {0}".format(self.data_format))
         w = create_weight("w", [inp_c, 10])
         x = tf.matmul(x, w)
+        if(is_valid):
+          self.valid_layers.append(x)
     return x
 
   def _enas_layer(self, layer_id, prev_layers, start_idx, out_filters, is_training):
@@ -613,7 +628,7 @@ class GeneralChild(Model):
       0, dtype=tf.int32, trainable=False, name="global_step")
     #'''
     self.lr = tf.placeholder(tf.float32)
-    self.train_op, self.grad_norm, self.optimizer = get_train_ops_with_optimizer(
+    self.train_op, self.decay_lr, self.grad_norm, self.optimizer = get_train_ops_with_optimizer(
       self.optimizer_code,
       self.lr,
       self.loss,
@@ -624,8 +639,11 @@ class GeneralChild(Model):
       sync_replicas=self.sync_replicas,
       num_aggregate=self.num_aggregate,
       num_replicas=self.num_replicas)
-    tf_variables.append(self.global_step)
-    self.saver = tf.train.Saver(tf_variables)
+    #tf_variables.append(self.global_step)
+    child_vars =  tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=self.name)
+    if self.global_step not in child_vars:
+      child_vars.append(self.global_step)
+    self.saver = tf.train.Saver(child_vars, max_to_keep=1, keep_checkpoint_every_n_hours=1e9)
     '''
     self.train_op, self.lr, self.grad_norm, self.optimizer = get_train_ops(
       self.loss,
@@ -654,7 +672,7 @@ class GeneralChild(Model):
     if self.x_valid is not None:
       print("-" * 80)
       print("Build valid graph")
-      logits = self._model(self.x_valid, False, reuse=True)
+      logits = self._model(self.x_valid, False, reuse=True, is_valid=True)
       self.valid_preds = tf.argmax(logits, axis=1)
       self.valid_preds = tf.to_int32(self.valid_preds)
       self.valid_acc = tf.equal(self.valid_preds, self.y_valid)
@@ -691,6 +709,7 @@ class GeneralChild(Model):
         seed=self.seed,
         allow_smaller_final_batch=True,
       )
+
 
       def _pre_process(x):
         x = tf.pad(x, [[4, 4], [4, 4], [0, 0]])

@@ -116,7 +116,7 @@ def get_train_ops_with_optimizer(
   grad_norm = tf.global_norm(grads)
 
   #train_op = opt.minimize(loss, var_list=tf_variables)
-  return train_op, grad_norm, opt
+  return train_op, lr_decay, grad_norm, opt
 
 def get_train_ops(
     loss,

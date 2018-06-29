@@ -10,6 +10,7 @@ import time
 import pdb
 import numpy as np
 import tensorflow as tf
+import pdb
 
 from src import utils
 from src.utils import Logger
@@ -199,13 +200,17 @@ def get_ops(images, labels):
     "loss": child_model.loss,
     "train_op": child_model.train_op,
     "lr": child_model.lr,
+    "decay_lr": child_model.decay_lr,
     "grad_norm": child_model.grad_norm,
     "train_acc": child_model.train_acc,
     "valid_acc": child_model.valid_acc,
     "optimizer": child_model.optimizer,
     "num_train_batches": child_model.num_train_batches,
     "eval_batch_size": child_model.eval_batch_size,
-    'saver':child_model.saver
+    'saver':child_model.saver,
+    'y_train':child_model.y_train,
+    'y_valid':child_model.y_valid,
+    "child":child_model
   }
 
   child_placeholder = {
@@ -235,6 +240,9 @@ def train():
   else:
     images, labels = read_data(FLAGS.data_path, num_valids=0)
 
+  images['train'], labels['train'] = images['train'][:44928], labels['train'][:44928]
+  #images['valid'], labels['valid'] = images['valid'][:100], labels['valid'][:100]
+
   g = tf.Graph()
   with g.as_default():
     ops, opt_controller = get_ops(images, labels)
@@ -242,7 +250,7 @@ def train():
     child_placeholder = ops['child_placeholder']
     controller_ops = ops["controller"]
     child_saver = child_ops['saver']
-
+    #pdb.set_trace()
     saver = tf.train.Saver(max_to_keep=2)
     checkpoint_saver_hook = tf.train.CheckpointSaverHook(
       FLAGS.output_dir, save_steps=child_ops["num_train_batches"], saver=saver)
@@ -269,39 +277,77 @@ def train():
         #pdb.set_trace()
         #if FLAGS.saved_path != '':
         #  saver.restore(get_session(sess), saved_path)#enaos_outputs/model.ckpt-292161')
-        def verifier(feed_arc, feed_optimizer_code):
-          child_save_path = child_saver.save(get_session(sess), FLAGS.output_dir+'/child_model.ckpt')
-          best_reward, best_lr = -1e8, 0
-          for lr in [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1]:
-            print("verifier lr:", lr)
-            run_ops = [
-              child_ops["loss"],
-              child_ops["lr"],
-              child_ops["grad_norm"],
-              child_ops["train_acc"],
-              child_ops["train_op"],
-            ]
-            # train 1 epoch and get acc
-            for b in range(ops["num_train_batches"]):
-              loss, lr, gn, tr_acc, _ = sess.run(run_ops, {child_placeholder['lr']:lr, 
-                                                      child_placeholder['use_opt_code_feed']:1,
-                                                      child_placeholder['optimizer_code_feed']:feed_optimizer_code,
-                                                      child_placeholder['use_feed_arc']:1,
-                                                      child_placeholder['feed_arc']:feed_arc
-                                                      })
-              #print("verifier loss:", loss)
-            total_acc = []
-            # get acc
-            for b in range(ops['num_valid_batches']):
-              acc = sess.run(child_ops['valid_acc']) / float(child_ops['eval_batch_size'])
-              total_acc += [acc]
-            reward = sum(total_acc) / len(total_acc)
-            print("verifier acc:", reward)
-            if reward > best_reward:
-              best_reward = reward
-              best_lr = lr
-            # restore child weights
-            child_saver.restore(get_session(sess), child_save_path)
+        class Verifier:
+          def __init__(self):
+            self.child_save_path = ''
+          def __call__(self, feed_arc, feed_optimizer_code):
+            def _valid_acc():
+              total_acc = []
+              for b in range(ops['num_valid_batches']):
+                acc_aggr = sess.run(child_ops['valid_acc'],{child_placeholder['use_feed_arc']:1,child_placeholder['feed_arc']:feed_arc})
+                acc = acc_aggr / float(child_ops['eval_batch_size'])
+                #print("{}: {}, {}".format(b, acc, y_valid_out[:10]))
+                total_acc += [acc]
+              reward = sum(total_acc) / len(total_acc)
+              return reward
+            def _valid_acc_layers():
+              total_acc = []
+              valid_layers_out = sess.run(child_ops['child'].valid_layers,{child_placeholder['use_feed_arc']:1,child_placeholder['feed_arc']:feed_arc})
+              return valid_layers_out
+
+            #last_w = [var for var in tf.trainable_variables() if 'child' in var.name][-1]
+            #chil_vars = [var for var in tf.trainable_variables() if 'child' in var.name]
+            print("save path: ", self.child_save_path)
+            #print("last_w peek:", sess.run(last_w)[0,:])
+            print(" Original verifier acc:", _valid_acc())
+            child_saver.restore(get_session(sess), self.child_save_path)
+            #original_valid_layers = _valid_acc_layers()
+            #original_vars = sess.run(chil_vars)
+            #pdb.set_trace()
+            #print(" Original1 verifier acc:", _valid_acc())
+            #print("last_w1 peek:", sess.run(last_w)[0,:])
+            best_reward, best_lr = -1e8, 0
+            for lr in [1e-2, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1]:
+              print("verifier lr:", lr)
+              run_ops = [
+                child_ops["loss"],
+                child_ops["decay_lr"],
+                child_ops["grad_norm"],
+                child_ops["train_acc"],
+                child_ops["train_op"],
+                child_ops["y_train"]
+              ]
+              # train 1 epoch and get acc
+              #print("last_w before_train peek:", sess.run(last_w)[0,:])
+              for b in range(ops["num_train_batches"]):
+                loss, lr, gn, tr_acc, _, y_train = sess.run(run_ops, {child_placeholder['lr']:lr, 
+                                                        child_placeholder['use_opt_code_feed']:1,
+                                                        child_placeholder['optimizer_code_feed']:feed_optimizer_code,
+                                                        child_placeholder['use_feed_arc']:1,
+                                                        child_placeholder['feed_arc']:feed_arc
+                                                        })
+                
+              #print("last_w after_train peek:", sess.run(last_w)[0,:])
+              reward = _valid_acc()
+              #after_train_valid_layers = _valid_acc_layers()
+              #trained_vars = sess.run(chil_vars)
+              print(" verifier acc:", reward)
+              if reward > best_reward:
+                best_reward = reward
+                best_lr = lr
+              # restore child weights
+              child_saver.restore(get_session(sess), self.child_save_path)
+              #after_restore_valid_layers = _valid_acc_layers()
+              #restored_vars = sess.run(chil_vars)
+              #print(" After Restore verifier acc:", _valid_acc())
+              #print("last_w after_restore peek:", sess.run(last_w)[0,:])
+              #pdb.set_trace()
+            #pdb.set_trace()
+            print("opt code: {}, best lr: {}, acc: {}".format(feed_optimizer_code, best_lr, best_reward))
+            print(" Post verifier acc:", _valid_acc())
+            #print("post last_w peek:", sess.run(last_w)[0,:])
+            return best_reward
+          '''
           # train 5 epoch 
           for b in range(ops["num_train_batches"] * 5):
             loss, lr, gn, tr_acc, _ = sess.run(run_ops, {child_placeholder['lr']:best_lr, 
@@ -316,13 +362,19 @@ def train():
             total_acc += [acc]
           child_saver.restore(get_session(sess), child_save_path)
           reward = sum(total_acc) / len(total_acc)
+          print("opt code: {}, best lr: {}, acc: {}".format(feed_optimizer_code, best_lr, reward))
           return reward
-
+          '''
         print("Starting session")
         start_time = time.time()
+        epoch = 0
+        verifier = Verifier()
         while True:
           #pdb.set_trace()
-          opt_controller.train(verifier, sess)
+          if epoch % 5 == 0:
+            child_save_path = child_saver.save(get_session(sess), FLAGS.output_dir+'/child_model.ckpt')
+            verifier.child_save_path = child_save_path
+            opt_controller.train(verifier, sess)
           run_ops = [
             child_ops["loss"],
             child_ops["lr"],
@@ -330,10 +382,10 @@ def train():
             child_ops["train_acc"],
             child_ops["train_op"],
           ]
-          child_save_path = child_saver.save(get_session(sess), FLAGS.output_dir+'/child_model.ckpt')
+          #child_save_path = child_saver.save(get_session(sess), FLAGS.output_dir+'/child_model.ckpt')
           loss, lr, gn, tr_acc, _ = sess.run(run_ops, {child_placeholder['lr']:0.1})#, child_placeholder['optimizer_code_feed']:[15,0,0,0,5]})
           global_step = sess.run(child_ops["global_step"])
-          child_saver.restore(get_session(sess), child_save_path)
+          #child_saver.restore(get_session(sess), child_save_path)
           if FLAGS.child_sync_replicas:
             actual_step = global_step * FLAGS.num_aggregate
           else:

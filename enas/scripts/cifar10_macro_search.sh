@@ -19,7 +19,7 @@ python src/cifar10/main.py \
   --child_l2_reg=0.00025 \
   --child_num_branches=6 \
   --child_num_cell_layers=5 \
-  --child_keep_prob=0.90 \
+  --child_keep_prob=1.0 \
   --child_drop_path_keep_prob=0.60 \
   --child_lr_cosine \
   --child_lr_max=0.05 \

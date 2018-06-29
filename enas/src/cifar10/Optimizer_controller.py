@@ -25,7 +25,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 EP_LEN = 1
 EP_MAX = 600
-A_LR = 0.0001
+A_LR = 0.001
 A_DIM = 5
 A_UPDATE_STEPS = 1
 MAX_LENGTH = 5
@@ -87,7 +87,7 @@ class PPO(object):
 
 		for idx in range(MAX_LENGTH):
 			block_idx = bisect.bisect_left([1,3,4], idx % 5)
-		  	a[:,idx] += sum(num_actions[:block_idx])
+			a[:,idx] += sum(num_actions[:block_idx])
 		# r: float, a: [batch_size, slen]
 		adv = sess.run(self.advantage, {self.tf_r: r})
 		#print("advantage: ", adv)
@@ -221,13 +221,14 @@ class lstm_policy_network:
 		last_state = encoder_states
 		#last_state = self.init_state(1)
 		for idx in range(MAX_LENGTH):
-		  block_idx = bisect.bisect_left([1,3,4], idx % 5)
-		  input = input + sum(num_actions[:block_idx]) # make input globally indexed
+		  if(idx > 0):
+		  	block_idx = bisect.bisect_left([1,3,4], (idx - 1) % 5)
+		  	input = input + sum(num_actions[:block_idx]) # make input globally indexed
 		  emb = tf.nn.embedding_lookup(self.dsl_embeddings, input) # [batch_size, 1, embedding_size]
 		  outputs, last_state = self._run_rnn(self.lstm_cell, emb, last_state,'decoder')
 		  final_output = tf.matmul(outputs[:,0], self.Ws[idx]) + self.Bs[idx]
 		  predicted_action = tf.multinomial(final_output, 1)
-		  #input = tf.expand_dims(predicted_action, 1)
+		  input = predicted_action
 		  if idx == 0:
 			predicted_actions = predicted_action
 		  else:
@@ -263,6 +264,39 @@ def sample_input_codes():
 		for j in range(i):
 			seq += [rand2()]
 	return seq
+
+def dummy_train_opt():
+	def _dummy_verifier(input_codes, opt_sequence):
+		'''
+		Args
+			input_codes: [78]
+			opt_sequence: [5]
+		Return
+			ratio [0, 1)
+		'''
+		input_total = sum(input_codes)
+		opt_total = sum(opt_sequence) * opt_sequence[0]
+		epsilon = 1e-8
+		return min(input_total, opt_total) / (max(input_total, opt_total) + epsilon)
+	def _sample_arc():
+		logits = tf.log([[1.,1.,1.,1.,1.]])
+		lst = []
+		for nlayer in range(1, 13):
+			logits = tf.log([[1.] * nlayer])
+			number = tf.multinomial(logits, 1)
+			number = tf.to_int32(number)
+			lst.append(number[0][0])
+			for prec_layer in range(1, nlayer):
+				logits = tf.log([[1., 1.]])
+				number = tf.multinomial(logits, 1)
+				number = tf.to_int32(number)
+				lst.append(number[0][0])
+		lst = tf.stack(lst, axis=0)
+		return tf.reshape(lst, [-1])
+	opt_controller = train_optimizer_controller(_sample_arc())
+	with tf.Session() as sess:
+		sess.run(tf.global_variables_initializer())
+		opt_controller.train(_dummy_verifier, sess)
 
 class train_optimizer_controller():
 	def __init__(self, sample_arc_op):
@@ -305,12 +339,15 @@ class train_optimizer_controller():
 			if self.global_idx % 10 == 0: 
 				print(
 					'Ep: %i' % self.global_idx,
-					"|reward: %i" % reward,
+					"|reward: %f" % reward,
 					"|sequence: %s" % str(sampled_sequence)
 				)
-				print("Average reward for last 100 episodes: {:.2f}".format(mean_rewards))
 				if self.global_idx % 10 == 0:
-					print("Best code {} | {} / rewards {}".format(', '.join([str(c) for c in self.best_code]), self.best_score, self.best_reward))
+					print("Average reward for last 100 episodes: {:.2f}".format(mean_rewards))
+					#print("Best code {} | {} / rewards {}".format(', '.join([str(c) for c in self.best_code]), self.best_score, self.best_reward))
 
 	def sample_opt_op(self):
 		return self.ppo.sample_opt_op[0]
+
+if __name__ == '__main__':
+	dummy_train_opt()
