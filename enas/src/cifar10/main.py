@@ -242,7 +242,7 @@ def train():
 
   images['train'], labels['train'] = images['train'][:44928], labels['train'][:44928]
   #images['valid'], labels['valid'] = images['valid'][:100], labels['valid'][:100]
-
+  print('num train: {}, num valid: {}'.format(len(labels['train']), len(labels['valid'])))
   g = tf.Graph()
   with g.as_default():
     ops, opt_controller = get_ops(images, labels)
@@ -264,6 +264,7 @@ def train():
       hooks.append(sync_replicas_hook)
 
     print("-" * 80)
+    print("chl Config: 1 epoch with lr predicted, 20 length, with entropy penalty / diff_arc_var / reuse operand constraint and left-right diff constraint")
     config = tf.ConfigProto(allow_soft_placement=True)
     def get_session(sess):
       session = sess
@@ -271,6 +272,7 @@ def train():
           #pylint: disable=W0212
           session = session._sess
       return session
+    
     with tf.train.SingularMonitoredSession(
       config=config, hooks=hooks, checkpoint_dir=FLAGS.output_dir) as sess:
         #print("graph size:", sess.graph_def.ByteSize())
@@ -281,6 +283,11 @@ def train():
           def __init__(self):
             self.child_save_path = ''
           def __call__(self, feed_arc, feed_optimizer_code):
+            #feed_optimizer_code = [15,0,0,0,5]
+            lr_list = [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1]
+            #print(feed_optimizer_code)
+            lr = lr_list[feed_optimizer_code[-1]]
+            feed_optimizer_code = feed_optimizer_code[:-1]
             def _valid_acc():
               total_acc = []
               for b in range(ops['num_valid_batches']):
@@ -296,75 +303,72 @@ def train():
               return valid_layers_out
 
             #last_w = [var for var in tf.trainable_variables() if 'child' in var.name][-1]
-            #chil_vars = [var for var in tf.trainable_variables() if 'child' in var.name]
-            print("save path: ", self.child_save_path)
+            #child_vars = [var for var in tf.trainable_variables() if 'child' in var.name]
+            #print("save path: ", self.child_save_path)
             #print("last_w peek:", sess.run(last_w)[0,:])
-            print(" Original verifier acc:", _valid_acc())
             child_saver.restore(get_session(sess), self.child_save_path)
-            #original_valid_layers = _valid_acc_layers()
-            #original_vars = sess.run(chil_vars)
+            #print(" Original verifier acc:", _valid_acc())
+            #self.original_valid_layers = _valid_acc_layers()
+            #self.original_vars = sess.run(child_vars)
             #pdb.set_trace()
             #print(" Original1 verifier acc:", _valid_acc())
             #print("last_w1 peek:", sess.run(last_w)[0,:])
             best_reward, best_lr = -1e8, 0
-            for lr in [1e-2, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1]:
-              print("verifier lr:", lr)
+            #for lr in [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1]:
+            for ii in range(1):
+              #print(" verifier lr:", lr)
               run_ops = [
                 child_ops["loss"],
                 child_ops["decay_lr"],
                 child_ops["grad_norm"],
                 child_ops["train_acc"],
                 child_ops["train_op"],
-                child_ops["y_train"]
               ]
               # train 1 epoch and get acc
               #print("last_w before_train peek:", sess.run(last_w)[0,:])
               for b in range(ops["num_train_batches"]):
-                loss, lr, gn, tr_acc, _, y_train = sess.run(run_ops, {child_placeholder['lr']:lr, 
+                loss, lr, gn, tr_acc, _ = sess.run(run_ops, {child_placeholder['lr']:lr, 
                                                         child_placeholder['use_opt_code_feed']:1,
                                                         child_placeholder['optimizer_code_feed']:feed_optimizer_code,
                                                         child_placeholder['use_feed_arc']:1,
                                                         child_placeholder['feed_arc']:feed_arc
                                                         })
-                
+              #global_step = sess.run(child_ops["global_step"])
+              #print("global_step: ", global_step)
               #print("last_w after_train peek:", sess.run(last_w)[0,:])
               reward = _valid_acc()
-              #after_train_valid_layers = _valid_acc_layers()
-              #trained_vars = sess.run(chil_vars)
-              print(" verifier acc:", reward)
+              #self.after_train_valid_layers = _valid_acc_layers()
+              #self.trained_vars = sess.run(child_vars)
+              #print(" verifier acc:", reward)
               if reward > best_reward:
                 best_reward = reward
                 best_lr = lr
               # restore child weights
               child_saver.restore(get_session(sess), self.child_save_path)
-              #after_restore_valid_layers = _valid_acc_layers()
-              #restored_vars = sess.run(chil_vars)
+              #self.after_restore_valid_layers = _valid_acc_layers()
+              #self.restored_vars = sess.run(child_vars)
               #print(" After Restore verifier acc:", _valid_acc())
               #print("last_w after_restore peek:", sess.run(last_w)[0,:])
               #pdb.set_trace()
             #pdb.set_trace()
-            print("opt code: {}, best lr: {}, acc: {}".format(feed_optimizer_code, best_lr, best_reward))
-            print(" Post verifier acc:", _valid_acc())
+            print("opt code: {}, lr: {}, acc: {}".format(feed_optimizer_code, best_lr, best_reward))
+            #print(" Post verifier acc:", _valid_acc())
             #print("post last_w peek:", sess.run(last_w)[0,:])
             return best_reward
-          '''
-          # train 5 epoch 
-          for b in range(ops["num_train_batches"] * 5):
-            loss, lr, gn, tr_acc, _ = sess.run(run_ops, {child_placeholder['lr']:best_lr, 
-                                                      child_placeholder['use_opt_code_feed']:1,
-                                                      child_placeholder['optimizer_code_feed']:feed_optimizer_code,
-                                                      child_placeholder['use_feed_arc']:1,
-                                                      child_placeholder['feed_arc']:feed_arc
-                                                      })
-          total_acc = []
-          for b in range(ops['num_valid_batches']):
-            acc = sess.run(child_ops['valid_acc']) / float(child_ops['eval_batch_size'])
-            total_acc += [acc]
-          child_saver.restore(get_session(sess), child_save_path)
-          reward = sum(total_acc) / len(total_acc)
-          print("opt code: {}, best lr: {}, acc: {}".format(feed_optimizer_code, best_lr, reward))
-          return reward
-          '''
+            '''
+            # train 5 epoch 
+            for b in range(ops["num_train_batches"] * 5):
+              loss, lr, gn, tr_acc, _ = sess.run(run_ops, {child_placeholder['lr']:best_lr, 
+                                                        child_placeholder['use_opt_code_feed']:1,
+                                                        child_placeholder['optimizer_code_feed']:feed_optimizer_code,
+                                                        child_placeholder['use_feed_arc']:1,
+                                                        child_placeholder['feed_arc']:feed_arc
+                                                        })
+            reward = _valid_acc()
+            child_saver.restore(get_session(sess), self.child_save_path)
+            print("opt code: {}, best lr: {}, acc: {}".format(feed_optimizer_code, best_lr, reward))
+            return reward
+            '''
         print("Starting session")
         start_time = time.time()
         epoch = 0
@@ -477,13 +481,14 @@ def main(_):
     os.makedirs(FLAGS.output_dir)
   elif FLAGS.reset_output_dir:
     print("Path {} exists. Remove and remake.".format(FLAGS.output_dir))
+    assert False
     shutil.rmtree(FLAGS.output_dir)
     os.makedirs(FLAGS.output_dir)
 
-  #print("-" * 80)
-  #log_file = os.path.join(FLAGS.output_dir, "stdout")
-  #print("Logging to {}".format(log_file))
-  #sys.stdout = Logger(log_file)
+  print("-" * 80)
+  log_file = FLAGS.output_dir + "_stdout"
+  print("Logging to {}".format(log_file))
+  sys.stdout = Logger(log_file)
 
   utils.print_user_flags()
   train()

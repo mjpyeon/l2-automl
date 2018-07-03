@@ -104,8 +104,6 @@ class CustomOptimizer(optimizer.Optimizer):
 		return binary_opts[key](var1, var2)
 
 	def _apply_dense(self, grad, var):
-		operand_names = ['g', 'g2', 'g3', 'm', 'v', 'r', 'sign_g', 'sign_m', '1', '2', 'epsilon', '10-4w', '10-3w', '10-2w', '10-1w', 'Adam', 'RMSprop']
-		operands = {oprd:None for oprd in operand_names}
 		#grad = tf.Print(grad, [tf.shape(grad)], 'grad shape')
 		# Prepare constants
 		lr_t = math_ops.cast(self._lr_t, var.dtype.base_dtype)
@@ -151,7 +149,10 @@ class CustomOptimizer(optimizer.Optimizer):
 			1e-2*var,
 			1e-1*var,
 			adam,
-			rmsprop
+			rmsprop,
+			tf.constant(10000.0, shape=grad.get_shape().as_list()),
+			tf.constant(10000.0, shape=grad.get_shape().as_list()),
+			tf.constant(10000.0, shape=grad.get_shape().as_list())
 		]
 		operands = {
 			0: grad,
@@ -190,7 +191,7 @@ class CustomOptimizer(optimizer.Optimizer):
 				result = binary1
 			return result
 		def tf_decipher(code):
-			def _length5(): 
+			def _length5(code): 
 				operand1 = tf.gather(operands_list, code[0])
 				#print('operand1', operand1)
 				operand2 = tf.gather(operands_list, code[1])
@@ -202,11 +203,18 @@ class CustomOptimizer(optimizer.Optimizer):
 				binary1 = self.tf_binary(unary1, unary2, code[4])
 				#print('binary1', binary1)
 				return binary1
+			def _length20(code):
+				# Todo: assert code length is 20
+				#assert_op = tf.Assert(tf.equal(tf.reduce_max(x), 1.), [x])
+				operands_list[17] = _length5(code[:5])
+				operands_list[18] = _length5(code[5:10])
+				operands_list[19] = _length5(code[10:15])
+				return _length5(code[15:20])
 			def _length2():
 				operand1 = tf.gather(operands_list, code[0])
 				unary1 = self.tf_unary(operand1, code[1])
 				return unary1
-			return _length5()
+			return _length20(code)#_length5(code)
 			#return tf.case({tf.equal(tf.size(code), 5):_length5, tf.equal(tf.size(code), 2):_length2}, default=_length5, exclusive=True)
 		#result = decipher(self._code)
 		result = tf_decipher(self._code)

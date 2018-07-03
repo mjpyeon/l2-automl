@@ -26,10 +26,15 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 EP_LEN = 1
 EP_MAX = 600
 A_LR = 0.001
-A_DIM = 5
 A_UPDATE_STEPS = 1
-MAX_LENGTH = 5
-num_actions = [17,12,6]
+MAX_LENGTH = 20 + 1
+A_DIM = MAX_LENGTH
+#num_actions = [17,17,12,12,6,7]
+num_actions = [[17+i, 12, 6] for i in range(4)] # 4 group of actions
+num_actions[-1].append(7) # append lr choice to last group
+#num_actions = [num for sublist in num_actions for num in sublist]
+n_hidden_units = 150
+embedding_size = 100
 #OLD_UPDATE_STEPS = 5
 METHOD = dict(name='clip', epsilon=0.2)
 SAVE_PATH='Saved_PPO/cifar10_REINFORCE_'
@@ -46,6 +51,8 @@ self = Object()
 class PPO(object):
 
 	def __init__(self, sample_arc_op):
+		self.entropy_weight = 0.03
+		self.arc_var_weight = 0.1
 		# critic
 		with tf.variable_scope('critic'):
 			#self.moving_average = -4.0
@@ -61,8 +68,6 @@ class PPO(object):
 		self.input_codes = tf.placeholder_with_default(tf.constant([[1,2,3,4,5]]), shape=[None, None])
 		self.use_input_codes = tf.placeholder_with_default(tf.constant(0), shape=None)
 		self.batch_size = tf.placeholder_with_default(tf.constant(1), shape=[])
-		#self.batch_size = tf.placeholder(tf.int32, [])
-		#pdb.set_trace()
 		sample_input = tf.cond(tf.equal(self.use_input_codes, 1), lambda:self.input_codes, lambda:tf.expand_dims(sample_arc_op, 0))
 		self.sample_opt_op = new_policy.sample_sequence(sample_input, self.batch_size)
 		self.target_gather = tf.placeholder(tf.int32, [None,A_DIM,2])
@@ -71,8 +76,8 @@ class PPO(object):
 
 		with tf.variable_scope('loss'):
 			with tf.variable_scope('surrogate'):
-				ratio = new_policy.prob(self.tfa, self.target_gather, self.batch_size, self.input_codes) 
-				surr = ratio * self.tfadv
+				ratio, entropy, var = new_policy.prob(self.tfa, self.target_gather, self.batch_size, self.input_codes) 
+				surr = ratio * self.tfadv + entropy * self.entropy_weight + var * self.arc_var_weight
 			if METHOD['name'] == 'clip':
 				self.aloss = -tf.reduce_mean(surr)
 		new_policy_params  = new_policy.get_parameters()
@@ -87,7 +92,7 @@ class PPO(object):
 
 		for idx in range(MAX_LENGTH):
 			block_idx = bisect.bisect_left([1,3,4], idx % 5)
-			a[:,idx] += sum(num_actions[:block_idx])
+			a[:,idx] += sum(num_actions[-1][:block_idx])
 		# r: float, a: [batch_size, slen]
 		adv = sess.run(self.advantage, {self.tf_r: r})
 		#print("advantage: ", adv)
@@ -107,61 +112,39 @@ class PPO(object):
 		return sess.run(self.sample_opt_op, {self.input_codes:input_codes, self.batch_size:len(input_codes), self.use_input_codes:1})
 
 
-'''
-from my_PPO import lstm_policy_network_test
-import numpy as np
-testc = lstm_policy_network_test()
-slen = 5
-batch_size = 2
-target_ = np.array([[1,2,3,4,5], [2,3,4,1,5]])
-target_gather_1 = np.repeat(np.array([i for i in range(batch_size)])[:,None], slen, axis=1)
-target_gather_ = np.concatenate((np.expand_dims(target_gather_1, axis=2), np.expand_dims(target_, axis=2)), axis=2)
-testc.prob_test(target_, target_gather_) 
-testc.sample_seq_test()
-testc.policy.get_parameters()
-
-'''
-class lstm_policy_network_test:
-		def __init__(self):
-			self.policy = lstm_policy_network('test_policy', False)
-			self.target = tf.placeholder(tf.int32, [None,5])
-			self.target_gather = tf.placeholder(tf.int32, [None,5,2])
-			self.batch_size = tf.placeholder(tf.int32, [])
-			self.prob_op = self.policy.prob(self.target, self.target_gather, self.batch_size)
-			self.sample_seq_op = self.policy.sample_sequence()
-			sess = tf.Session()
-			sess.run(tf.global_variables_initializer())
-			print("variables initialized")
-		def prob_test(self, target, target_gather):
-			return sess.run(self.prob_op, {self.target:target, self.target_gather:target_gather, self.batch_size:len(target)})
-		def sample_seq_test(self):
-			return sess.run(self.sample_seq_op)
-
 class lstm_policy_network:
 	def __init__(self, scope, trainable):
-		n_hidden_units = 150
-		embedding_size = 100
-		MAX_LENGTH    = 5
 		self.epsilon = 1e-8
 		# Assume default first input '0'
 		#self.start_input = tf.zeros([1,1], tf.int32)
-		self.start_input = sum(num_actions)
+		self.start_input = sum(num_actions[-1])
 		self.scope = scope
 		self.trainable = trainable
 		# 0:<s>, 1-17:operand_idx, 18-29:unary_idx, 30-35:binary_idx
+		#self.mean_probs = [num_actions[i][j] for i ]
 		with tf.variable_scope(self.scope):
 			self.encoder = tf.contrib.rnn.BasicLSTMCell(n_hidden_units, forget_bias=1.0, state_is_tuple=True)
+			# encoding for arc, 6 nodes in total
 			self.encoder_embedding = tf.get_variable("encoder_embeddings", [6 + 1, embedding_size], trainable=self.trainable)
-			self.dsl_embeddings = tf.get_variable("dsl_embeddings", [sum(num_actions) + 1, embedding_size], trainable=self.trainable)
+			self.dsl_embeddings = tf.get_variable("dsl_embeddings", [sum(num_actions[-1]) + 1, embedding_size], trainable=self.trainable)
 			self.lstm_cell = tf.contrib.rnn.BasicLSTMCell(n_hidden_units, forget_bias=1.0, state_is_tuple=True)
 			self.Ws = []
 			self.Bs = []
+			self.AvgProbs = []
 			for idx in range(MAX_LENGTH):
-				block_idx = bisect.bisect_left([1,3,4], idx % 5)
-				self.Ws.append(tf.get_variable("W_lstm_"+str(idx), [n_hidden_units, num_actions[block_idx]],
+				# if idx is last idx -> predicting learning rate
+				if idx == MAX_LENGTH - 1:
+					dim = num_actions[-1][-1]
+				else:
+					block_idx = bisect.bisect_left([1,3,4], idx % 5)
+					dim = num_actions[idx//5][block_idx]
+				self.Ws.append(tf.get_variable("W_lstm_"+str(idx), [n_hidden_units, dim],
 								   initializer=tf.random_normal_initializer(stddev=0.1), trainable=self.trainable))
-				self.Bs.append(tf.get_variable("b_lstm_"+str(idx), [num_actions[block_idx]],
+				self.Bs.append(tf.get_variable("b_lstm_"+str(idx), [dim],
 								   initializer=tf.constant_initializer(0), trainable=self.trainable))
+				self.AvgProbs.append(tf.get_variable("AvgProbs_"+str(idx), [n_hidden_units, dim], 
+								   initializer=tf.constant_initializer(1./dim), trainable=False))
+			print("self.Bs: ", self.Bs)
 	
 	def encode(self, input_codes, batch_size):
 		# input_codes [batch_size, slen]
@@ -185,9 +168,13 @@ class lstm_policy_network:
 			target: [batch_size, slen]
 			target_gather: [batch_size, slen, 2], 2 is [batch_idx,target_elem]
 		'''
-		encoder_outputs, encoder_states = self.encode(input_codes, batch_size)
+		single_batch_assert = tf.Assert(tf.equal(batch_size, 1), [batch_size])
+		with tf.control_dependencies([single_batch_assert]):
+			encoder_outputs, encoder_states = self.encode(input_codes, batch_size)
 		#encoder_states = self.init_state(batch_size)
-		outprob = 1 # tf.fill(tf.shape(target[:,0:1]), 1.)
+		outprob = 0 # tf.fill(tf.shape(target[:,0:1]), 1.)
+		outentropy = 0
+		diff_arc_var = 0
 		input = tf.concat([tf.fill(tf.shape(target[:,0:1]), self.start_input), target[:,:-1]], 1) # [1, slen]
 		#input = tf.expand_dims(input, 0) # [1, slen, input_dim], when batchSize == 1
 		emb = tf.nn.embedding_lookup(self.dsl_embeddings, input) # [1, slen, embedding_size]
@@ -195,10 +182,16 @@ class lstm_policy_network:
 		for idx in range(MAX_LENGTH):
 			output_logtis = tf.matmul(outputs[:,idx], self.Ws[idx]) + self.Bs[idx] # [batch_size, num_action]
 			outprobs = tf.nn.softmax(output_logtis)
+			mean_probs = self.AvgProbs[idx]
+			self.AvgProbs[idx] = 0.9 * self.AvgProbs[idx] + 0.1 * outprobs[0]
+			#mean_probs = tf.fill(tf.shape(outprobs),tf.reduce_mean(outprobs))
+			diff_arc_var += tf.reduce_mean(tf.square(outprobs[0] - mean_probs))
 			#outprob *= outprobs[0,target[0, idx]]
+			#outentropy += tf.nn.softmax_cross_entropy_with_logits(labels=outprobs, logits=output_logtis)
+			outentropy += tf.reduce_sum(outprobs * tf.log(outprobs), 1)
 			outprob += tf.log(tf.gather_nd(outprobs, target_gather[:,idx,:]) + self.epsilon)
 			#outprob *= tf.gather_nd(outprobs, target_gather[:,idx,:])
-		return outprob
+		return outprob, outentropy, diff_arc_var
 	'''
 	outprobs [batch_size, num_action]
 	target [batch_size, slen]
@@ -215,18 +208,32 @@ class lstm_policy_network:
 		output a sequence sampled from policy
 		Return 
 		'''
+		single_batch_assert = tf.Assert(tf.equal(batch_size, 1), [batch_size])
 		encoder_outputs, encoder_states = self.encode(input_codes, batch_size)
-		input = tf.fill([batch_size,1], self.start_input)
+		with tf.control_dependencies([single_batch_assert]):
+			input = tf.fill([batch_size,1], self.start_input)
 		#input = tf.constant(self.start_input, shape=[batch_size,1], dtype=tf.int32)
 		last_state = encoder_states
 		#last_state = self.init_state(1)
 		for idx in range(MAX_LENGTH):
 		  if(idx > 0):
 		  	block_idx = bisect.bisect_left([1,3,4], (idx - 1) % 5)
-		  	input = input + sum(num_actions[:block_idx]) # make input globally indexed
+		  	input = input + sum(num_actions[-1][:block_idx]) # make input globally indexed
 		  emb = tf.nn.embedding_lookup(self.dsl_embeddings, input) # [batch_size, 1, embedding_size]
 		  outputs, last_state = self._run_rnn(self.lstm_cell, emb, last_state,'decoder')
 		  final_output = tf.matmul(outputs[:,0], self.Ws[idx]) + self.Bs[idx]
+		  # if second operand
+		  if(idx % 5 == 1):
+		  	# force the left and right operands to be different at each iteration
+		  	#final_output[:,predicted_action] = tf.fill(tf.shape(final_output[:,0:1]),-np.inf)
+		  	print(final_output[:,:predicted_action[0][0]])#, final_output[:,predicted_action+1:])
+		  	final_output = tf.concat((final_output[:,:predicted_action[0][0]], tf.fill(tf.shape(final_output[:,0:1]),-np.inf), final_output[:,predicted_action[0][0]+1:]), axis=1)
+		  	# force to reuse one of the previously computed operand
+		  	if idx // 5 > 0:
+		  		final_output = tf.cond(tf.less(predicted_action[0][0], num_actions[0][0]),
+												lambda: tf.concat((tf.fill(tf.shape(final_output[:,:num_actions[0][0]]), -np.inf), final_output[:,num_actions[0][0]:]), axis=1),
+												lambda: final_output
+												)
 		  predicted_action = tf.multinomial(final_output, 1)
 		  input = predicted_action
 		  if idx == 0:
