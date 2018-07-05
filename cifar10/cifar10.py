@@ -51,7 +51,7 @@ import powersign as ps
 FLAGS = tf.app.flags.FLAGS
 
 # Basic model parameters.
-tf.app.flags.DEFINE_integer('batch_size', 128,
+tf.app.flags.DEFINE_integer('batch_size', 100,
                             """Number of images to process in a batch.""")
 tf.app.flags.DEFINE_string('data_dir', 'cifar10_data',
                            """Path to the CIFAR-10 data directory.""")
@@ -325,7 +325,7 @@ def _add_loss_summaries(total_loss):
   return loss_averages_op
 
 
-def train(total_loss, global_step, optimizer_code):
+def train(total_loss, global_step, optimizer_code, lr):
   """Train CIFAR-10 model.
 
   Create an optimizer and apply to all trainable variables. Add moving
@@ -343,7 +343,7 @@ def train(total_loss, global_step, optimizer_code):
   decay_steps = int(num_batches_per_epoch * NUM_EPOCHS_PER_DECAY)
 
   # Decay the learning rate exponentially based on the number of steps.
-  lr = tf.train.exponential_decay(INITIAL_LEARNING_RATE,
+  lr = tf.train.exponential_decay(lr,
                                   global_step,
                                   decay_steps,
                                   LEARNING_RATE_DECAY_FACTOR,

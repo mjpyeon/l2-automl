@@ -218,8 +218,8 @@ class lstm_policy_network:
 		outentropy, outprob = 0, 0
 		for idx in range(MAX_LENGTH):
 		  if(idx > 0):
-		  	block_idx = bisect.bisect_left([1,3,4], (idx - 1) % 5)
-		  	input = input + sum(num_actions[-1][:block_idx]) # make input globally indexed
+			block_idx = bisect.bisect_left([1,3,4], (idx - 1) % 5)
+			input = input + sum(num_actions[-1][:block_idx]) # make input globally indexed
 		  emb = tf.nn.embedding_lookup(self.dsl_embeddings, input) # [batch_size, 1, embedding_size]
 		  outputs, last_state = self._run_rnn(self.lstm_cell, emb, last_state,'decoder')
 		  final_output = tf.matmul(outputs[:,0], self.Ws[idx]) + self.Bs[idx]
@@ -228,13 +228,13 @@ class lstm_policy_network:
 
 		  # if second operand
 		  if(idx % 5 == 1):
-		  	# force the left and right operands to be different at each iteration
-		  	#final_output[:,predicted_action] = tf.fill(tf.shape(final_output[:,0:1]),-np.inf)
-		  	#print(final_output[:,:predicted_action[0][0]])#, final_output[:,predicted_action+1:])
-		  	final_output = tf.concat((final_output[:,:predicted_action[0][0]], tf.fill(tf.shape(final_output[:,0:1]),-np.inf), final_output[:,predicted_action[0][0]+1:]), axis=1)
-		  	# force to reuse one of the previously computed operand
-		  	if idx // 5 > 0:
-		  		final_output = tf.cond(tf.less(predicted_action[0][0], num_actions[0][0]),
+			# force the left and right operands to be different at each iteration
+			#final_output[:,predicted_action] = tf.fill(tf.shape(final_output[:,0:1]),-np.inf)
+			#print(final_output[:,:predicted_action[0][0]])#, final_output[:,predicted_action+1:])
+			final_output = tf.concat((final_output[:,:predicted_action[0][0]], tf.fill(tf.shape(final_output[:,0:1]),-np.inf), final_output[:,predicted_action[0][0]+1:]), axis=1)
+			# force to reuse one of the previously computed operand
+			if idx // 5 > 0:
+				final_output = tf.cond(tf.less(predicted_action[0][0], num_actions[0][0]),
 												lambda: tf.concat((tf.fill(tf.shape(final_output[:,:num_actions[0][0]]), -np.inf), final_output[:,num_actions[0][0]:]), axis=1),
 												lambda: final_output
 												)
@@ -356,8 +356,8 @@ class train_optimizer_controller():
 			for t in range(EP_LEN):
 				#score = dummyInputScore(input_codes[t])
 				sampled_sequence = sampled_sequences[t]
-				#reward = verifier(sampled_sequence)
-				reward = dummyRewardPoly(sampled_sequence)
+				reward = verifier(sess, sampled_sequence)
+				#reward = dummyRewardPoly(sampled_sequence)
 				buffer_sequences.append(sampled_sequence)
 				buffer_reward.append(reward)
 				if t == EP_LEN - 1:
@@ -385,6 +385,12 @@ class train_optimizer_controller():
 if __name__ == '__main__':
 	#dummy_train_opt()
 	opt_trainer = train_optimizer_controller()
+	verifier = trainer.verifier('verifier')
 	sess = tf.Session()
 	sess.run(tf.global_variables_initializer())
-	opt_trainer.train(trainer.main, sess)
+	coord=tf.train.Coordinator()
+	threads = tf.train.start_queue_runners(sess, coord)
+	tf.train.start_queue_runners(sess)
+	opt_trainer.train(verifier, sess)
+	coord.request_stop()
+	coord.join(threads) 

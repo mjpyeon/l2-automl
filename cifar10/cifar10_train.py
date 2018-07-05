@@ -63,6 +63,63 @@ num_batches_per_epoch = cifar10.NUM_EXAMPLES_PER_EPOCH_FOR_TRAIN // FLAGS.batch_
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 
+class verifier():
+  def __init__(self, scope):
+    self.scope = scope
+    self.build_graph()
+  def build_graph(self):
+    with tf.variable_scope(self.scope):
+      self.init_lr = tf.placeholder(tf.float32)
+      self.global_step = tf.Variable(0, dtype=tf.int32, trainable=False, name="global_step")
+      with tf.device('/cpu:0'):
+        images, labels = cifar10.distorted_inputs()
+      logits = cifar10.inference(images, is_train=True)
+      self.loss = cifar10.loss(logits, labels)
+      self.tf_optimizer_code = tf.placeholder(tf.int32)
+      self.train_op = cifar10.train(self.loss, self.global_step, self.tf_optimizer_code, self.init_lr)
+      #saver = tf.train.Saver()
+      val_images, val_labels = cifar10.inputs(eval_data=False)
+      val_logits = cifar10.inference(val_images, is_train=False)
+      logits_mean, logits_var = tf.nn.moments(val_logits, axes=[1])
+      val_top_k_op = tf.nn.in_top_k(val_logits, val_labels, 1)
+      self.val_top_k_op = tf.cond(tf.less(tf.reduce_sum(logits_var), 1e-8), lambda: tf.fill(tf.shape(val_top_k_op), False), lambda: val_top_k_op)
+      verifier_vars =  tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=self.scope)
+      self.init_new_vars_op = tf.variables_initializer(verifier_vars)
+  def eval_once(self, sess):
+      val_num_iter = int(math.ceil(FLAGS.val_num_examples / FLAGS.batch_size))
+      true_count = 0  # Counts the number of correct predictions.
+      total_sample_count = val_num_iter * FLAGS.batch_size
+      for step in range(val_num_iter):
+        predictions = sess.run([self.val_top_k_op])
+        true_count += np.sum(predictions)
+      precision = float(true_count) / total_sample_count
+      return precision
+  def train(self, epochs, sess, optimizer_code, lr):
+    sess.run(self.init_new_vars_op)
+    last_step = num_batches_per_epoch * epochs
+    for step in range(last_step): 
+      loss_out, _ = sess.run([self.loss, self.train_op], {self.tf_optimizer_code:optimizer_code, self.init_lr:lr})
+      if (math.isnan(loss_out) or loss_out > 1e2):
+        return 0
+    precision = self.eval_once(sess)
+    return precision
+  def __call__(self, sess, optimizer_code):
+    best_lr = 1e-1
+    best_acc = 0
+    for lr in [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1]:
+      acc = self.train(1, sess, optimizer_code, lr)
+      if acc > best_acc:
+        best_acc = acc
+        best_lr = lr
+      if acc < 0.0001: # nan loss met
+        break
+
+    print('best lr found {}, 1 epoch acc: {}'.format(best_lr, best_acc)),
+    acc = self.train(5, sess, optimizer_code, lr)
+    print(', 5 epochs acc {}'.format(acc))
+    return acc
+
+
 def train_epoch(optimizer_code, lr=0.1, Full_train=False, log=False):
   cifar10.INITIAL_LEARNING_RATE = lr
   best_loss = 1e10
@@ -166,6 +223,7 @@ def train_epoch(optimizer_code, lr=0.1, Full_train=False, log=False):
   #with tf.Graph().as_default():
 
   return precision #sum(last_ten_loss) / len(last_ten_loss)
+
 
 
 
