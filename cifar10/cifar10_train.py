@@ -84,7 +84,9 @@ def train_epoch(optimizer_code, lr=0.1, Full_train=False, log=False):
     #saver = tf.train.Saver()
     val_images, val_labels = cifar10.inputs(eval_data=False)
     val_logits = cifar10.inference(val_images, is_train=False)
+    logits_mean, logits_var = tf.nn.moments(val_logits, axes=[1])
     val_top_k_op = tf.nn.in_top_k(val_logits, val_labels, 1)
+    val_top_k_op = tf.cond(tf.less(tf.reduce_sum(logits_var), 1e-8), lambda: tf.fill(tf.shape(val_top_k_op), False), lambda: val_top_k_op)
     '''
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.333)  
     with tf.train.MonitoredTrainingSession(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
@@ -141,21 +143,24 @@ def train_epoch(optimizer_code, lr=0.1, Full_train=False, log=False):
       threads = tf.train.start_queue_runners(mon_sess, coord)
       tf.train.start_queue_runners(mon_sess)
       global_step_out = 0
-      pdb.set_trace()
+      #pdb.set_trace()
       while global_step_out < last_step:
         loss_out, _ = mon_sess.run([loss, train_op], {tf_optimizer_code:optimizer_code})
         if (math.isnan(loss_out) or loss_out > 1e2):
-          pdb.set_trace()
+          #pdb.set_trace()
           return 0
         last_ten_loss.pop(0)
         last_ten_loss.append(loss_out)
         global_step_out = mon_sess.run(global_step)
-        if global_step_out % num_batches_per_epoch == 0:
-          print('step {}: valid acc {}'.format(global_step_out, eval_once(mon_sess)))
+        #if global_step_out % num_batches_per_epoch == 0 and global_step_out != 0:
+        #  print('step {}: valid acc {}'.format(global_step_out, eval_once(mon_sess)))
         #if(best_loss > loss_out):
         #  best_loss = loss_out
       #saver.save(mon_sess, FLAGS.train_dir+'/model.ckpt')
       precision = eval_once(mon_sess)
+      if precision == 1.0:
+        pdb.set_trace()
+        pass
       coord.request_stop()
       coord.join(threads) 
   #with tf.Graph().as_default():
@@ -166,7 +171,9 @@ def train_epoch(optimizer_code, lr=0.1, Full_train=False, log=False):
 
 def main(optimizer_code=None):  # pylint: disable=unused-argument
   #optimizer_code = [14, 10, 8, 11, 5, 11, 17, 2, 1, 3, 15, 18, 4, 2, 0, 17, 18, 8, 1, 2] # this gives 100% acc on valid set after 4 epochs of training
-  optimizer_code = [ 0,12, 0, 7, 0, 3,17, 7,11, 4,12,18, 0, 1, 4,12,17,11, 0, 2]
+  #optimizer_code = [ 0,12, 0, 7, 0, 3,17, 7,11, 4,12,18, 0, 1, 4,12,17,11, 0, 2] # good for 1 epoch training, but nan for more training
+  #optimizer_code = [0,0,0,0,0, 0,0,0,0,0, 6,7,0,0,2, 19,0,2,0,2]
+  #optimizer_code = [0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 15,0,0,0,5]
   print(optimizer_code)
   cifar10.maybe_download_and_extract()
   if tf.gfile.Exists(FLAGS.train_dir):
@@ -176,7 +183,8 @@ def main(optimizer_code=None):  # pylint: disable=unused-argument
 
   best_lr = 1e-1
   best_acc = 0
-  '''
+  #pdb.set_trace()
+  #'''
   for lr in [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1]:
   #for lr in [1e-1, 1e-1, 1e-1, 1e-1, 1e-1, 1e0, 1e0, 1e0, 1e0, 1e0]:  
     #print("learning rate: ", lr)
@@ -184,7 +192,9 @@ def main(optimizer_code=None):  # pylint: disable=unused-argument
     if acc > best_acc:
       best_acc = acc
       best_lr = lr
-  '''
+    if acc < 0.0001:
+      break
+  #'''
   cifar10.INITIAL_LEARNING_RATE = best_lr
   #if best_loss > 4.6:
   #  return best_loss
@@ -196,7 +206,10 @@ def main(optimizer_code=None):  # pylint: disable=unused-argument
 
 
 if __name__ == '__main__':
-  existing_codes = {'adam':[15,0,0,0,5],'rmsprop':[16,0,0,0,5],'momentum':[3,0,0,0,5],'sgd':[0,0,0,0,5]}
+  existing_codes = {'adam':[0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 15,0,0,0,5],
+                  'rmsprop':[0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 16,0,0,0,5],
+                  'momentum':[0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 3,0,0,0,5],
+                  'sgd':[0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,0, 0,0,0,0,5]}
   for k,v in existing_codes.iteritems():
     print(k, main(optimizer_code=v))
   #tf.app.run()

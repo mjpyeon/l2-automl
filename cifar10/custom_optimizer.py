@@ -51,13 +51,13 @@ class CustomOptimizer(optimizer.Optimizer):
 			tf.equal(key,2):lambda: tf.exp(x),
 			tf.equal(key,3):lambda: tf.log(tf.abs(x) + epsilon_t),
 			tf.equal(key,4):lambda: tf.sqrt(tf.abs(x) + epsilon_t),
-			tf.equal(key,5):lambda: tf.clip_by_value(x, -1e-5, 1e-5),
-			tf.equal(key,6):lambda: tf.clip_by_value(x, -1e-4, 1e-4),
-			tf.equal(key,7):lambda: tf.clip_by_value(x, -1e-3, 1e-3),
-			tf.equal(key,8):lambda: tf.cond(tf.equal(tf.multinomial(tf.log([[1.0, 9.0]]), 1)[0][0], 0), lambda:tf.zeros(tf.shape(x)), lambda:x),
-			tf.equal(key,9):lambda: tf.cond(tf.equal(tf.multinomial(tf.log([[3.0, 7.0]]), 1)[0][0], 0), lambda:tf.zeros(tf.shape(x)), lambda:x),
-			tf.equal(key,10):lambda: tf.cond(tf.equal(tf.multinomial(tf.log([[5.0, 5.0]]), 1)[0][0], 0), lambda:tf.zeros(tf.shape(x)), lambda:x),
-			tf.equal(key,11):lambda: tf.sign(x)
+			#tf.equal(key,5):lambda: tf.clip_by_value(x, -1e-5, 1e-5),
+			#tf.equal(key,6):lambda: tf.clip_by_value(x, -1e-4, 1e-4),
+			#tf.equal(key,7):lambda: tf.clip_by_value(x, -1e-3, 1e-3),
+			#tf.equal(key,8):lambda: tf.cond(tf.equal(tf.multinomial(tf.log([[1.0, 9.0]]), 1)[0][0], 0), lambda:tf.zeros(tf.shape(x)), lambda:x),
+			#tf.equal(key,9):lambda: tf.cond(tf.equal(tf.multinomial(tf.log([[3.0, 7.0]]), 1)[0][0], 0), lambda:tf.zeros(tf.shape(x)), lambda:x),
+			#tf.equal(key,10):lambda: tf.cond(tf.equal(tf.multinomial(tf.log([[5.0, 5.0]]), 1)[0][0], 0), lambda:tf.zeros(tf.shape(x)), lambda:x),
+			tf.equal(key,5):lambda: tf.sign(x)
 		}, default=lambda:x, exclusive=True)
 		return unary
 
@@ -134,22 +134,22 @@ class CustomOptimizer(optimizer.Optimizer):
 		adam =  m_t_hat / (math_ops.sqrt(v_t_hat) + epsilon_t)
 		operands_list = [
 			grad,
-			grad2,
-			grad3,
+			#grad2,
+			#grad3,
 			m_t,
-			v_t,
-			r_t,
+			#v_t,
+			#r_t,
 			tf.sign(grad),
 			tf.sign(m_t),
 			tf.constant(1.0, shape=grad.get_shape().as_list()),
 			tf.constant(2.0, shape=grad.get_shape().as_list()),
-			tf.fill(tf.shape(grad), epsilon_t),
-			1e-4*var,
-			1e-3*var,
-			1e-2*var,
-			1e-1*var,
-			adam,
-			rmsprop,
+			#tf.fill(tf.shape(grad), epsilon_t),
+			#1e-4*var,
+			#1e-3*var,
+			#1e-2*var,
+			#1e-1*var,
+			#adam,
+			#rmsprop,
 			tf.constant(10000.0, shape=grad.get_shape().as_list()),
 			tf.constant(10000.0, shape=grad.get_shape().as_list()),
 			tf.constant(10000.0, shape=grad.get_shape().as_list())
@@ -206,15 +206,23 @@ class CustomOptimizer(optimizer.Optimizer):
 			def _length20(code):
 				# Todo: assert code length is 20
 				#assert_op = tf.Assert(tf.equal(tf.reduce_max(x), 1.), [x])
-				operands_list[17] = _length5(code[:5])
-				operands_list[18] = _length5(code[5:10])
-				operands_list[19] = _length5(code[10:15])
+				operands_list[-3] = _length5(code[:5])
+				operands_list[-2] = _length5(code[5:10])
+				operands_list[-1] = _length5(code[10:15])
 				return _length5(code[15:20])
 			def _length2():
 				operand1 = tf.gather(operands_list, code[0])
 				unary1 = self.tf_unary(operand1, code[1])
 				return unary1
-			return _length20(code)#_length5(code)
+			'''
+			length = tf.size(code)
+			length = tf.Print(length, [length], 'code length: ')
+			func = tf.case({
+				tf.equal(length,5):lambda: _length5(code),
+				tf.equal(length,20):lambda: _length20(code)
+			}, default=lambda:_length5(code), exclusive=True)
+			'''
+			return _length20(code)
 			#return tf.case({tf.equal(tf.size(code), 5):_length5, tf.equal(tf.size(code), 2):_length2}, default=_length5, exclusive=True)
 		#result = decipher(self._code)
 		result = tf_decipher(self._code)

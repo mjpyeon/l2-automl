@@ -264,7 +264,7 @@ def train():
       hooks.append(sync_replicas_hook)
 
     print("-" * 80)
-    print("chl Config: 1 epoch with lr predicted, 20 length, with entropy penalty / diff_arc_var / reuse operand constraint and left-right diff constraint")
+    print("chl Config: 1 epoch with lr predicted, 20 length, with correct entropy penalty / var / reuse operand constraint and left-right diff constraint")
     config = tf.ConfigProto(allow_soft_placement=True)
     def get_session(sess):
       session = sess

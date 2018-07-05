@@ -47,6 +47,7 @@ SEED = 1
 tf.set_random_seed(SEED)
 import cifar10_input
 import custom_optimizer as cto
+import powersign as ps
 FLAGS = tf.app.flags.FLAGS
 
 # Basic model parameters.
@@ -360,6 +361,8 @@ def train(total_loss, global_step, optimizer_code):
     #opt = powersign.PowerSignOptimizer(lr)
     #opt = PowerSign1.PowerSign(lr)
     opt = cto.CustomOptimizer(lr, optimizer_code)
+    #opt = ps.PowerSign(lr)
+
     #opt = tf.train.RMSPropOptimizer(lr)
     grads = opt.compute_gradients(total_loss)
 

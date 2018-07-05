@@ -13,6 +13,7 @@ gym 0.9.2
 """
 
 import tensorflow as tf
+from tensorflow.python.ops import state_ops
 import numpy as np
 import matplotlib.pyplot as plt
 import bisect
@@ -25,7 +26,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 EP_LEN = 1
 EP_MAX = 600
-A_LR = 0.001
+A_LR = 1e-5#0.001
 A_UPDATE_STEPS = 1
 MAX_LENGTH = 20 + 1
 A_DIM = MAX_LENGTH
@@ -39,7 +40,6 @@ embedding_size = 100
 METHOD = dict(name='clip', epsilon=0.2)
 SAVE_PATH='Saved_PPO/cifar10_REINFORCE_'
 LOAD_PATH=''#Saved_PPO/Dummy_step_200_avgR_7.6'
-print('EP_LEN',EP_LEN,', EP_MAX',EP_MAX, 'A_UPDATE_STEPS', A_UPDATE_STEPS)
 '''
 import tensorflow as tf
 class Object(object):
@@ -51,8 +51,8 @@ self = Object()
 class PPO(object):
 
 	def __init__(self, sample_arc_op):
-		self.entropy_weight = 0.03
-		self.arc_var_weight = 0.1
+		self.entropy_weight = 0.0015
+		self.arc_var_weight = 0.003
 		# critic
 		with tf.variable_scope('critic'):
 			#self.moving_average = -4.0
@@ -65,6 +65,7 @@ class PPO(object):
 			self.advantage = self.tf_r - self.moving_average
 		# actor
 		new_policy = lstm_policy_network('new_policy', True)
+		old_policy = lstm_policy_network('old_policy', False)
 		self.input_codes = tf.placeholder_with_default(tf.constant([[1,2,3,4,5]]), shape=[None, None])
 		self.use_input_codes = tf.placeholder_with_default(tf.constant(0), shape=None)
 		self.batch_size = tf.placeholder_with_default(tf.constant(1), shape=[])
@@ -73,15 +74,27 @@ class PPO(object):
 		self.target_gather = tf.placeholder(tf.int32, [None,A_DIM,2])
 		self.tfa = tf.placeholder(tf.int32, [None, A_DIM], 'action')
 		self.tfadv = tf.placeholder(tf.float32, [None, 1], 'advantage')
-
+		print('EP_LEN:',EP_LEN,', EP_MAX:',EP_MAX, 'A_UPDATE_STEPS:', A_UPDATE_STEPS, 'A_LR:', A_LR)
+		print('opt controller optimizer: PPO, entropy_weight {}, self.arc_var_weight: {}'.format(self.entropy_weight, self.arc_var_weight))
 		with tf.variable_scope('loss'):
 			with tf.variable_scope('surrogate'):
-				ratio, entropy, var = new_policy.prob(self.tfa, self.target_gather, self.batch_size, self.input_codes) 
-				surr = ratio * self.tfadv + entropy * self.entropy_weight + var * self.arc_var_weight
+				prob_new, entropy, var = new_policy.prob(self.tfa, self.target_gather, self.batch_size, self.input_codes) 
+				prob_old, _, _ = old_policy.prob(self.tfa, self.target_gather, self.batch_size, self.input_codes) 
+				ratio = tf.exp(prob_new - prob_new)
+				pg_loss1 = -self.tfadv*ratio
+				pg_loss2 = -tf.clip_by_value(ratio, 1.-METHOD['epsilon'], 1.+METHOD['epsilon'])*self.tfadv
+				pg_loss = tf.reduce_mean(tf.maximum(pg_loss1, pg_loss2))
+				self.aloss = pg_loss - entropy * self.entropy_weight - var * self.arc_var_weight
+				'''
+				ratio, entropy = new_policy.prob(self.tfa, self.target_gather, self.batch_size, self.input_codes) 
+				surr = ratio * self.tfadv + entropy * self.entropy_weight# + var * self.arc_var_weight
 			if METHOD['name'] == 'clip':
 				self.aloss = -tf.reduce_mean(surr)
+				'''
 		new_policy_params  = new_policy.get_parameters()
-
+		old_policy_params = old_policy.get_parameters()
+		self.update_old_policy_op = [oldp.assign(p) for p, oldp in zip(new_policy_params, old_policy_params)]
+		
 		with tf.variable_scope('atrain'):
 			self.atrain_op = tf.train.AdamOptimizer(A_LR).minimize(self.aloss, var_list=new_policy_params)
 
@@ -94,6 +107,7 @@ class PPO(object):
 			block_idx = bisect.bisect_left([1,3,4], idx % 5)
 			a[:,idx] += sum(num_actions[-1][:block_idx])
 		# r: float, a: [batch_size, slen]
+		sess.run(self.update_old_policy_op)
 		adv = sess.run(self.advantage, {self.tf_r: r})
 		#print("advantage: ", adv)
 		# adv = (adv - adv.mean())/(adv.std()+1e-6)     # sometimes helpful
@@ -123,11 +137,11 @@ class lstm_policy_network:
 		# 0:<s>, 1-17:operand_idx, 18-29:unary_idx, 30-35:binary_idx
 		#self.mean_probs = [num_actions[i][j] for i ]
 		with tf.variable_scope(self.scope):
-			self.encoder = tf.contrib.rnn.BasicLSTMCell(n_hidden_units, forget_bias=1.0, state_is_tuple=True)
+			self.encoder = tf.contrib.rnn.LSTMCell(n_hidden_units, initializer=tf.random_uniform_initializer(-0.08, 0.08), forget_bias=1.0, state_is_tuple=True)
 			# encoding for arc, 6 nodes in total
 			self.encoder_embedding = tf.get_variable("encoder_embeddings", [6 + 1, embedding_size], trainable=self.trainable)
-			self.dsl_embeddings = tf.get_variable("dsl_embeddings", [sum(num_actions[-1]) + 1, embedding_size], trainable=self.trainable)
-			self.lstm_cell = tf.contrib.rnn.BasicLSTMCell(n_hidden_units, forget_bias=1.0, state_is_tuple=True)
+			self.dsl_embeddings = tf.get_variable("dsl_embeddings", [sum(num_actions[-1]) + 1, embedding_size], trainable=self.trainable, initializer=tf.random_uniform_initializer(-0.08, 0.08))
+			self.lstm_cell = tf.contrib.rnn.LSTMCell(n_hidden_units, initializer=tf.random_uniform_initializer(-0.08, 0.08), forget_bias=1.0, state_is_tuple=True)
 			self.Ws = []
 			self.Bs = []
 			self.AvgProbs = []
@@ -138,13 +152,13 @@ class lstm_policy_network:
 				else:
 					block_idx = bisect.bisect_left([1,3,4], idx % 5)
 					dim = num_actions[idx//5][block_idx]
-				self.Ws.append(tf.get_variable("W_lstm_"+str(idx), [n_hidden_units, dim],
-								   initializer=tf.random_normal_initializer(stddev=0.1), trainable=self.trainable))
-				self.Bs.append(tf.get_variable("b_lstm_"+str(idx), [dim],
+				self.Ws.append(tf.get_variable("W_lstm_"+str(idx), [n_hidden_units, dim], dtype=tf.float32,
+								   initializer=tf.random_uniform_initializer(-0.08, 0.08), trainable=self.trainable))
+				self.Bs.append(tf.get_variable("b_lstm_"+str(idx), [dim], dtype=tf.float32,
 								   initializer=tf.constant_initializer(0), trainable=self.trainable))
-				self.AvgProbs.append(tf.get_variable("AvgProbs_"+str(idx), [n_hidden_units, dim], 
-								   initializer=tf.constant_initializer(1./dim), trainable=False))
-			print("self.Bs: ", self.Bs)
+				self.AvgProbs.append(tf.get_variable("AvgProbs_"+str(idx), [n_hidden_units, dim], dtype=tf.float32,
+								   initializer=tf.random_uniform_initializer(-0.08, 0.08), trainable=False))
+			#print("self.Bs: ", self.Bs)
 	
 	def encode(self, input_codes, batch_size):
 		# input_codes [batch_size, slen]
@@ -156,7 +170,7 @@ class lstm_policy_network:
 		return tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=self.scope)
 
 	def _run_rnn(self, lstm_cell, emb, init_state, scope):
-		with tf.variable_scope(self.scope):
+		with tf.variable_scope(self.scope, initializer=tf.random_uniform_initializer(-0.08, 0.08)):
 			return tf.nn.dynamic_rnn(lstm_cell, emb, initial_state=init_state, time_major=False, scope=scope)
 
 	def init_state(self, batch_size):
@@ -182,13 +196,13 @@ class lstm_policy_network:
 		for idx in range(MAX_LENGTH):
 			output_logtis = tf.matmul(outputs[:,idx], self.Ws[idx]) + self.Bs[idx] # [batch_size, num_action]
 			outprobs = tf.nn.softmax(output_logtis)
-			mean_probs = self.AvgProbs[idx]
-			self.AvgProbs[idx] = 0.9 * self.AvgProbs[idx] + 0.1 * outprobs[0]
+			#mean_probs = self.AvgProbs[idx]
 			#mean_probs = tf.fill(tf.shape(outprobs),tf.reduce_mean(outprobs))
-			diff_arc_var += tf.reduce_mean(tf.square(outprobs[0] - mean_probs))
+			diff_arc_var += tf.reduce_mean(tf.square(outprobs[0] - self.AvgProbs[idx]))
+			state_ops.assign(self.AvgProbs[idx], 0.9 * self.AvgProbs[idx] + 0.1 * outprobs[0])
 			#outprob *= outprobs[0,target[0, idx]]
 			#outentropy += tf.nn.softmax_cross_entropy_with_logits(labels=outprobs, logits=output_logtis)
-			outentropy += tf.reduce_sum(outprobs * tf.log(outprobs), 1)
+			outentropy += -tf.reduce_sum(outprobs * tf.log(outprobs), 1)
 			outprob += tf.log(tf.gather_nd(outprobs, target_gather[:,idx,:]) + self.epsilon)
 			#outprob *= tf.gather_nd(outprobs, target_gather[:,idx,:])
 		return outprob, outentropy, diff_arc_var
@@ -320,10 +334,11 @@ class train_optimizer_controller():
 	def train(self, verifier, sess):
 		for ep in range(EP_MAX):
 			buffer_sequences, buffer_reward = [], []
-			input_codes = []
+			input_codes, sampled_sequences = [], []
 			for t in range(EP_LEN):
 				input_codes += [sess.run(self.sample_arc_op)]
-			sampled_sequences = self.ppo.choose_sequence(input_codes, sess)
+				sampled_sequences += [self.ppo.choose_sequence([input_codes[-1]], sess)[0]]
+			#sampled_sequences = self.ppo.choose_sequence(input_codes, sess)
 			for t in range(EP_LEN):
 				#score = dummyInputScore(input_codes[t])
 				self.global_idx += 1
