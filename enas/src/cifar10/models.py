@@ -84,31 +84,6 @@ class Model(object):
         allow_smaller_final_batch=True,
       )
       '''
-      '''
-      from src.cifar10.data_utils import read_data
-      import tensorflow as tf
-      import numpy as np
-      class Object(object):
-        pass
-
-      self = Object()
-      images, labels = read_data('data/cifar10')
-      with tf.device("/cpu:0"):
-        self.num_train_examples = np.shape(images["train"])[0]
-        self.batch_size = 128
-        self.num_train_batches = (
-          self.num_train_examples + self.batch_size - 1) // self.batch_size
-        x_train, y_train = tf.train.batch(
-          [images["train"], labels["train"]],
-          batch_size=self.batch_size,
-          capacity=self.num_train_examples % self.batch_size,
-          enqueue_many=True,
-          num_threads=1,
-          allow_smaller_final_batch=True,
-        )
-      sess = tf.InteractiveSession()
-      sess.run(y_train)
-      '''      
       x_train, y_train = tf.train.batch(
         [images["train"], labels["train"]],
         batch_size=self.batch_size,
@@ -121,8 +96,8 @@ class Model(object):
 
       def _pre_process(x):
         x = tf.pad(x, [[4, 4], [4, 4], [0, 0]])
-        x = tf.random_crop(x, [32, 32, 3], seed=self.seed)
-        x = tf.image.random_flip_left_right(x, seed=self.seed)
+        #x = tf.random_crop(x, [32, 32, 3], seed=self.seed)
+        #x = tf.image.random_flip_left_right(x, seed=self.seed)
         if self.cutout_size is not None:
           mask = tf.ones([self.cutout_size, self.cutout_size], dtype=tf.int32)
           start = tf.random_uniform([2], minval=0, maxval=32, dtype=tf.int32)

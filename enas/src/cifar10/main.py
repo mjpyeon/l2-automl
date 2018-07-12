@@ -214,7 +214,7 @@ def get_ops(images, labels):
   }
 
   child_placeholder = {
-    "lr":child_model.lr,
+    "lr":child_model.decay_lr,
     "use_opt_code_feed":child_model.use_opt_code_feed,
     "optimizer_code_feed":child_model.optimizer_code_feed,
     "use_feed_arc":child_model.use_feed_arc,
@@ -240,7 +240,7 @@ def train():
   else:
     images, labels = read_data(FLAGS.data_path, num_valids=0)
 
-  images['train'], labels['train'] = images['train'][:44928], labels['train'][:44928]
+  images['train'], labels['train'] = images['train'][:128], labels['train'][:128]
   #images['valid'], labels['valid'] = images['valid'][:100], labels['valid'][:100]
   print('num train: {}, num valid: {}'.format(len(labels['train']), len(labels['valid'])))
   g = tf.Graph()
@@ -284,6 +284,7 @@ def train():
             self.child_save_path = ''
           def __call__(self, feed_arc, feed_optimizer_code):
             #feed_optimizer_code = [15,0,0,0,5]
+            feed_optimizer_code = [0,1,5,5,2,0,0,0,0,0,0,0,0,0,0,6,0,2,0,2,3]
             lr_list = [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1]
             #print(feed_optimizer_code)
             lr = lr_list[feed_optimizer_code[-1]]
@@ -297,25 +298,29 @@ def train():
                 total_acc += [acc]
               reward = sum(total_acc) / len(total_acc)
               return reward
-            def _valid_acc_layers():
+            def _train_acc_layers():
               total_acc = []
-              valid_layers_out = sess.run(child_ops['child'].valid_layers,{child_placeholder['use_feed_arc']:1,child_placeholder['feed_arc']:feed_arc})
-              return valid_layers_out
+              train_layers_out = sess.run(child_ops['child'].train_layers,{child_placeholder['use_feed_arc']:1,child_placeholder['feed_arc']:feed_arc})
+              return train_layers_out
 
+            debug_acc_list = [-1] * 10
+            debug_layers = ['a', 'b']
+            debug_vars = ['a','b']
             #last_w = [var for var in tf.trainable_variables() if 'child' in var.name][-1]
-            #child_vars = [var for var in tf.trainable_variables() if 'child' in var.name]
+            child_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='child')
             #print("save path: ", self.child_save_path)
             #print("last_w peek:", sess.run(last_w)[0,:])
             child_saver.restore(get_session(sess), self.child_save_path)
-            #print(" Original verifier acc:", _valid_acc())
-            #self.original_valid_layers = _valid_acc_layers()
+            #self.original_train_layers = _valid_acc_layers()
             #self.original_vars = sess.run(child_vars)
             #pdb.set_trace()
             #print(" Original1 verifier acc:", _valid_acc())
             #print("last_w1 peek:", sess.run(last_w)[0,:])
             best_reward, best_lr = -1e8, 0
             #for lr in [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1]:
-            for ii in range(1):
+            for ii in range(3):
+              #pdb.set_trace()
+              print(" Original verifier acc:", _valid_acc())
               #print(" verifier lr:", lr)
               run_ops = [
                 child_ops["loss"],
@@ -323,21 +328,32 @@ def train():
                 child_ops["grad_norm"],
                 child_ops["train_acc"],
                 child_ops["train_op"],
+                child_ops["y_train"],
+                child_ops['child'].train_layers
               ]
               # train 1 epoch and get acc
               #print("last_w before_train peek:", sess.run(last_w)[0,:])
               for b in range(ops["num_train_batches"]):
-                loss, lr, gn, tr_acc, _ = sess.run(run_ops, {child_placeholder['lr']:lr, 
+                loss, lr, gn, tr_acc, _, y_train_out, train_layers = sess.run(run_ops, {child_placeholder['lr']:lr, 
                                                         child_placeholder['use_opt_code_feed']:1,
                                                         child_placeholder['optimizer_code_feed']:feed_optimizer_code,
                                                         child_placeholder['use_feed_arc']:1,
                                                         child_placeholder['feed_arc']:feed_arc
                                                         })
+                
+                debug_layers[ii % 2] = train_layers
+                debug_vars[ii % 2] = sess.run(child_vars)
+                if b < 5 or b >= 127:
+                  id_ = b % (127 - 5)
+                  if(debug_acc_list[id_] != -1 and debug_acc_list[id_] != tr_acc):
+                    pdb.set_trace()
+                  debug_acc_list[id_] = tr_acc
+                  print("b: {}, tr_acc: {}, lr: {}, loss: {}, y_train: {}".format(b, tr_acc, lr, loss, y_train_out))
               #global_step = sess.run(child_ops["global_step"])
               #print("global_step: ", global_step)
               #print("last_w after_train peek:", sess.run(last_w)[0,:])
               reward = _valid_acc()
-              #self.after_train_valid_layers = _valid_acc_layers()
+              #self.after_train_train_layers = _valid_acc_layers()
               #self.trained_vars = sess.run(child_vars)
               #print(" verifier acc:", reward)
               if reward > best_reward:
@@ -345,13 +361,14 @@ def train():
                 best_lr = lr
               # restore child weights
               child_saver.restore(get_session(sess), self.child_save_path)
-              #self.after_restore_valid_layers = _valid_acc_layers()
+              print("opt code: {}, lr: {}, acc: {}\nfeed_arc: {}".format(feed_optimizer_code, best_lr, best_reward, feed_arc))
+              #self.after_restore_train_layers = _valid_acc_layers()
               #self.restored_vars = sess.run(child_vars)
               #print(" After Restore verifier acc:", _valid_acc())
               #print("last_w after_restore peek:", sess.run(last_w)[0,:])
               #pdb.set_trace()
             #pdb.set_trace()
-            print("opt code: {}, lr: {}, acc: {}".format(feed_optimizer_code, best_lr, best_reward))
+            #print("opt code: {}, lr: {}, acc: {}\nfeed_arc: {}".format(feed_optimizer_code, best_lr, best_reward, feed_arc))
             #print(" Post verifier acc:", _valid_acc())
             #print("post last_w peek:", sess.run(last_w)[0,:])
             return best_reward

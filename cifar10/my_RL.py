@@ -20,15 +20,16 @@ from collections import deque
 import os
 import random
 import math
+import time
 import pdb
 import cifar10_train as trainer
 from scipy import stats
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+#os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 EP_LEN = 5
-EP_MAX = 3000
+EP_MAX = 1000
 A_LR = 1e-2
-A_UPDATE_STEPS = 1
+A_UPDATE_STEPS = 2
 A_UPDATE_STEPS_OLD = 1
 MAX_LENGTH = 20 + 1
 A_DIM = MAX_LENGTH
@@ -42,6 +43,8 @@ embedding_size = 100
 METHOD = dict(name='clip', epsilon=0.2)
 SAVE_PATH='Saved_PPO/cifar10_REINFORCE_'
 LOAD_PATH=''#Saved_PPO/Dummy_step_200_avgR_7.6'
+SEED = 5
+tf.set_random_seed(SEED)
 '''
 import tensorflow as tf
 class Object(object):
@@ -52,7 +55,7 @@ self = Object()
 
 class PPO(object):
 	def __init__(self):
-		self.entropy_weight = 0#0.0015
+		self.entropy_weight = 0.0015
 		# critic
 		with tf.variable_scope('critic'):
 			#self.moving_average = -4.0
@@ -65,39 +68,48 @@ class PPO(object):
 			self.advantage = self.tf_r - self.moving_average
 		# actor
 		new_policy = lstm_policy_network('new_policy', True)
-		#old_policy = lstm_policy_network('old_policy', False)
+		self.new_policy = new_policy
+		old_policy = lstm_policy_network('old_policy', False)
+		self.old_policy = old_policy
 		self.batch_size = tf.placeholder_with_default(tf.constant(1), shape=[])
 		self.sample_opt_op = new_policy.sample_sequence(self.batch_size)
 		self.target_gather = tf.placeholder(tf.int32, [None,A_DIM,2])
 		self.tfa = tf.placeholder(tf.int32, [None, A_DIM], 'action')
 		self.tfadv = tf.placeholder(tf.float32, [None, 1], 'advantage')
 		print('EP_LEN:',EP_LEN,', EP_MAX:',EP_MAX, 'A_UPDATE_STEPS:', A_UPDATE_STEPS, 'A_LR:', A_LR, 'A_UPDATE_STEPS_OLD:', A_UPDATE_STEPS_OLD)
-		print('optimizer: Reinforce, entropy_weight {}'.format(self.entropy_weight))
+		print('optimizer: PPO, entropy_weight {}'.format(self.entropy_weight))
 
-		with tf.variable_scope('loss'):
-			with tf.variable_scope('surrogate'):
-				prob_new, entropy = new_policy.prob(self.tfa, self.target_gather, self.batch_size) 
-				#prob_old, _ = old_policy.prob(self.tfa, self.target_gather, self.batch_size) 
-				prob_old = tf.stop_gradient(prob_new)
-				ratio = prob_new / (prob_old+1e-8)
-				pg_loss1 = -self.tfadv*ratio
-				pg_loss2 = -tf.clip_by_value(ratio, 1.-METHOD['epsilon'], 1.+METHOD['epsilon'])*self.tfadv
-				#pg_loss = tf.reduce_mean(tf.maximum(pg_loss1, pg_loss2))
-				pg_loss = -self.tfadv*prob_new
-				self.aloss = pg_loss - entropy * self.entropy_weight
-				#surr = ratio * self.tfadv + entropy * self.entropy_weight
-			'''
+		#with tf.variable_scope('loss'):
+		#	with tf.variable_scope('surrogate'):
+		prob_new, entropy = new_policy.prob(self.tfa, self.target_gather, self.batch_size) 
+		prob_old, _ = old_policy.prob(self.tfa, self.target_gather, self.batch_size) 
+		#prob_old = tf.stop_gradient(prob_new)
+		#self.prob_equal_assert = tf.Assert(tf.equal(tf.reduce_sum(tf.cast(tf.logical_not(tf.equal(prob_new, prob_old)), tf.float32)), 0), [prob_new, prob_old])
+		self.prob_new = prob_new
+		self.prob_old = prob_old
+		#ratio = prob_new / (prob_old+1e-8)
+		#with tf.control_dependencies([prob_equal_assert]):
+		ratio = tf.exp(prob_new - prob_old)
+		#self.g_new = tf.gradients(prob_new, [new_policy.Bs[0]])
+		#self.g_old = tf.gradients(ratio, [new_policy.Bs[0]])
+		pg_loss1 = -self.tfadv*ratio
+		pg_loss2 = -tf.clip_by_value(ratio, 1.-METHOD['epsilon'], 1.+METHOD['epsilon'])*self.tfadv
+		pg_loss = tf.reduce_mean(tf.maximum(pg_loss1, pg_loss2))
+		#pg_loss = -self.tfadv*prob_new
+		self.aloss = pg_loss - entropy * self.entropy_weight
+		#		surr = ratio * self.tfadv + entropy * self.entropy_weight
+		'''
 			if METHOD['name'] == 'clip':
 				self.aloss = -tf.reduce_mean(tf.minimum(
 					surr,
 					tf.clip_by_value(ratio, 1.-METHOD['epsilon'], 1.+METHOD['epsilon'])*self.tfadv))
 				self.aloss = -tf.reduce_mean(surr)
-			'''
-		new_policy_params  = new_policy.get_parameters()
-		#old_policy_params = old_policy.get_parameters()
-		#self.update_old_policy_op = [oldp.assign(p) for p, oldp in zip(new_policy_params, old_policy_params)]
+		'''
+		self.new_policy_params  = new_policy.get_parameters()
+		self.old_policy_params = old_policy.get_parameters()
+		self.update_old_policy_op = [oldp.assign(p) for p, oldp in zip(self.new_policy_params, self.old_policy_params)]
 		with tf.variable_scope('atrain'):
-			self.atrain_op = tf.train.AdamOptimizer(A_LR).minimize(self.aloss, var_list=new_policy_params)
+			self.atrain_op = tf.train.AdamOptimizer(A_LR).minimize(self.aloss, var_list=self.new_policy_params)
 
 	def update(self, a, r, step, sess):
 		batch_size = len(a)
@@ -108,12 +120,12 @@ class PPO(object):
 			block_idx = bisect.bisect_left([1,3,4], idx % 5)
 			a[:,idx] += sum(num_actions[-1][:block_idx])
 		# r: float, a: [batch_size, slen]
-		#if step % A_UPDATE_STEPS_OLD == 0:
-		#	sess.run(self.update_old_policy_op)
+		if step % A_UPDATE_STEPS_OLD == 0:
+			sess.run(self.update_old_policy_op)
 		adv = sess.run(self.advantage, {self.tf_r: r})
+		#pdb.set_trace()
 		#print("advantage: ", adv)
 		# adv = (adv - adv.mean())/(adv.std()+1e-6)     # sometimes helpful
-
 		# update actor
 		if METHOD['name'] == 'clip':
 			 # clipping method, find this is better (OpenAI's paper)
@@ -159,9 +171,9 @@ class lstm_policy_network:
 	def get_parameters(self):
 		return tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=self.scope)
 
-	def _run_rnn(self, lstm_cell, emb, init_state, scope):
+	def _run_rnn(self, lstm_cell, emb, init_state):
 		with tf.variable_scope(self.scope, initializer=tf.random_uniform_initializer(-0.08, 0.08)):
-			return tf.nn.dynamic_rnn(lstm_cell, emb, initial_state=init_state, time_major=False, scope=scope)
+			return tf.nn.dynamic_rnn(lstm_cell, emb, initial_state=init_state, time_major=False)
 
 	def init_state(self, batch_size):
 		return self.lstm_cell.zero_state(batch_size, dtype=tf.float32)
@@ -176,12 +188,18 @@ class lstm_policy_network:
 		#with tf.control_dependencies([single_batch_assert]):
 		#	encoder_outputs, encoder_states = self.encode(input_codes, batch_size)
 		encoder_states = self.init_state(batch_size)
+		self.encoder_states = encoder_states
 		outprob = 0 # tf.fill(tf.shape(target[:,0:1]), 1.)
 		outentropy = 0
 		input = tf.concat([tf.fill(tf.shape(target[:,0:1]), self.start_input), target[:,:-1]], 1) # [1, slen]
+		self.input = input
 		#input = tf.expand_dims(input, 0) # [1, slen, input_dim], when batchSize == 1
 		emb = tf.nn.embedding_lookup(self.dsl_embeddings, input) # [1, slen, embedding_size]
-		outputs, final_state = self._run_rnn(self.lstm_cell, emb, encoder_states,'decoder')
+		self.emb = emb
+		outputs, final_state = self._run_rnn(self.lstm_cell, emb, encoder_states)
+		outputs1, final_state1 = self._run_rnn(self.lstm_cell, emb, encoder_states)
+		self.outputs = outputs
+		self.outputs1 = outputs1
 		for idx in range(MAX_LENGTH):
 			output_logtis = tf.matmul(outputs[:,idx], self.Ws[idx]) + self.Bs[idx] # [batch_size, num_action]
 			outprobs = tf.nn.softmax(output_logtis)
@@ -221,7 +239,7 @@ class lstm_policy_network:
 			block_idx = bisect.bisect_left([1,3,4], (idx - 1) % 5)
 			input = input + sum(num_actions[-1][:block_idx]) # make input globally indexed
 		  emb = tf.nn.embedding_lookup(self.dsl_embeddings, input) # [batch_size, 1, embedding_size]
-		  outputs, last_state = self._run_rnn(self.lstm_cell, emb, last_state,'decoder')
+		  outputs, last_state = self._run_rnn(self.lstm_cell, emb, last_state)
 		  final_output = tf.matmul(outputs[:,0], self.Ws[idx]) + self.Bs[idx]
 		  #outprobs = tf.nn.softmax(final_output)
 		  #outentropy += tf.reduce_sum(outprobs * tf.log(outprobs), 1)
@@ -383,7 +401,14 @@ class train_optimizer_controller():
 		return self.ppo.sample_opt_op[0]
 
 if __name__ == '__main__':
+	'''
+	config = tf.ConfigProto(device_count={"CPU": 22, "GPU":0}, # limit to num_cpu_core CPU usage
+	                inter_op_parallelism_threads = 25, 
+	                intra_op_parallelism_threads = 7,
+	                log_device_placement=False)
+	'''
 	#dummy_train_opt()
+	start = time.time()
 	opt_trainer = train_optimizer_controller()
 	verifier = trainer.verifier('verifier')
 	sess = tf.Session()
@@ -394,3 +419,5 @@ if __name__ == '__main__':
 	opt_trainer.train(verifier, sess)
 	coord.request_stop()
 	coord.join(threads) 
+	end = time.time()
+	print('finish in {} minutes'.format((end - start)/60.0))

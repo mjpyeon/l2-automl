@@ -86,14 +86,14 @@ class verifier():
       verifier_vars =  tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=self.scope)
       self.init_new_vars_op = tf.variables_initializer(verifier_vars)
   def eval_once(self, sess):
-      val_num_iter = int(math.ceil(FLAGS.val_num_examples / FLAGS.batch_size))
-      true_count = 0  # Counts the number of correct predictions.
-      total_sample_count = val_num_iter * FLAGS.batch_size
-      for step in range(val_num_iter):
-        predictions = sess.run([self.val_top_k_op])
-        true_count += np.sum(predictions)
-      precision = float(true_count) / total_sample_count
-      return precision
+    val_num_iter = int(math.ceil(FLAGS.val_num_examples / FLAGS.batch_size))
+    true_count = 0  # Counts the number of correct predictions.
+    total_sample_count = val_num_iter * FLAGS.batch_size
+    for step in range(val_num_iter):
+      predictions = sess.run([self.val_top_k_op])
+      true_count += np.sum(predictions)
+    precision = float(true_count) / total_sample_count
+    return precision
   def train(self, epochs, sess, optimizer_code, lr):
     sess.run(self.init_new_vars_op)
     last_step = num_batches_per_epoch * epochs
@@ -106,6 +106,7 @@ class verifier():
   def __call__(self, sess, optimizer_code):
     best_lr = 1e-1
     best_acc = 0
+    print(optimizer_code)
     for lr in [1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1]:
       acc = self.train(1, sess, optimizer_code, lr)
       if acc > best_acc:
@@ -114,8 +115,8 @@ class verifier():
       if acc < 0.0001: # nan loss met
         break
 
-    print('best lr found {}, 1 epoch acc: {}'.format(best_lr, best_acc)),
-    acc = self.train(5, sess, optimizer_code, lr)
+    print('best lr found {}, 1 epoch acc: {}'.format(best_lr, best_acc), end='')
+    acc = self.train(5, sess, optimizer_code, best_lr)
     print(', 5 epochs acc {}'.format(acc))
     return acc
 

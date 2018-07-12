@@ -15,6 +15,7 @@ gym 0.9.2
 import tensorflow as tf
 from tensorflow.python.ops import state_ops
 import numpy as np
+from scipy import stats
 import matplotlib.pyplot as plt
 import bisect
 from collections import deque
@@ -24,14 +25,15 @@ import math
 import pdb
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
-EP_LEN = 1
-EP_MAX = 600
-A_LR = 1e-5#0.001
+EP_LEN = 3
+EP_MAX = 1000
+A_LR = 1e-2
 A_UPDATE_STEPS = 1
+A_UPDATE_STEPS_OLD = 1
 MAX_LENGTH = 20 + 1
 A_DIM = MAX_LENGTH
 #num_actions = [17,17,12,12,6,7]
-num_actions = [[17+i, 12, 6] for i in range(4)] # 4 group of actions
+num_actions = [[6+i, 6, 6] for i in range(4)] # 4 group of actions
 num_actions[-1].append(7) # append lr choice to last group
 #num_actions = [num for sublist in num_actions for num in sublist]
 n_hidden_units = 150
@@ -52,7 +54,7 @@ class PPO(object):
 
 	def __init__(self, sample_arc_op):
 		self.entropy_weight = 0.0015
-		self.arc_var_weight = 0.003
+		self.arc_var_weight = 0.0015
 		# critic
 		with tf.variable_scope('critic'):
 			#self.moving_average = -4.0
@@ -76,21 +78,22 @@ class PPO(object):
 		self.tfadv = tf.placeholder(tf.float32, [None, 1], 'advantage')
 		print('EP_LEN:',EP_LEN,', EP_MAX:',EP_MAX, 'A_UPDATE_STEPS:', A_UPDATE_STEPS, 'A_LR:', A_LR)
 		print('opt controller optimizer: PPO, entropy_weight {}, self.arc_var_weight: {}'.format(self.entropy_weight, self.arc_var_weight))
-		with tf.variable_scope('loss'):
-			with tf.variable_scope('surrogate'):
-				prob_new, entropy, var = new_policy.prob(self.tfa, self.target_gather, self.batch_size, self.input_codes) 
-				prob_old, _, _ = old_policy.prob(self.tfa, self.target_gather, self.batch_size, self.input_codes) 
-				ratio = tf.exp(prob_new - prob_new)
-				pg_loss1 = -self.tfadv*ratio
-				pg_loss2 = -tf.clip_by_value(ratio, 1.-METHOD['epsilon'], 1.+METHOD['epsilon'])*self.tfadv
-				pg_loss = tf.reduce_mean(tf.maximum(pg_loss1, pg_loss2))
-				self.aloss = pg_loss - entropy * self.entropy_weight - var * self.arc_var_weight
-				'''
+		#with tf.variable_scope('loss'):
+			#with tf.variable_scope('surrogate'):
+		prob_new, entropy, var = new_policy.prob(self.tfa, self.target_gather, self.batch_size, self.input_codes) 
+		prob_old, _, _ = old_policy.prob(self.tfa, self.target_gather, self.batch_size, self.input_codes) 
+		ratio = tf.exp(prob_new - prob_old)
+		pg_loss1 = -self.tfadv*ratio
+		pg_loss2 = -tf.clip_by_value(ratio, 1.-METHOD['epsilon'], 1.+METHOD['epsilon'])*self.tfadv
+		pg_loss = tf.reduce_mean(tf.maximum(pg_loss1, pg_loss2))
+		#pg_loss = -self.tfadv*prob_new
+		self.aloss = pg_loss - entropy * self.entropy_weight - var * self.arc_var_weight
+		'''
 				ratio, entropy = new_policy.prob(self.tfa, self.target_gather, self.batch_size, self.input_codes) 
 				surr = ratio * self.tfadv + entropy * self.entropy_weight# + var * self.arc_var_weight
 			if METHOD['name'] == 'clip':
 				self.aloss = -tf.reduce_mean(surr)
-				'''
+		'''
 		new_policy_params  = new_policy.get_parameters()
 		old_policy_params = old_policy.get_parameters()
 		self.update_old_policy_op = [oldp.assign(p) for p, oldp in zip(new_policy_params, old_policy_params)]
@@ -107,7 +110,9 @@ class PPO(object):
 			block_idx = bisect.bisect_left([1,3,4], idx % 5)
 			a[:,idx] += sum(num_actions[-1][:block_idx])
 		# r: float, a: [batch_size, slen]
-		sess.run(self.update_old_policy_op)
+		#sess.run(self.update_old_policy_op)
+		if step % A_UPDATE_STEPS_OLD == 0:
+			sess.run(self.update_old_policy_op)
 		adv = sess.run(self.advantage, {self.tf_r: r})
 		#print("advantage: ", adv)
 		# adv = (adv - adv.mean())/(adv.std()+1e-6)     # sometimes helpful
@@ -156,7 +161,7 @@ class lstm_policy_network:
 								   initializer=tf.random_uniform_initializer(-0.08, 0.08), trainable=self.trainable))
 				self.Bs.append(tf.get_variable("b_lstm_"+str(idx), [dim], dtype=tf.float32,
 								   initializer=tf.constant_initializer(0), trainable=self.trainable))
-				self.AvgProbs.append(tf.get_variable("AvgProbs_"+str(idx), [n_hidden_units, dim], dtype=tf.float32,
+				self.AvgProbs.append(tf.get_variable("AvgProbs_"+str(idx), [EP_LEN, dim], dtype=tf.float32,
 								   initializer=tf.random_uniform_initializer(-0.08, 0.08), trainable=False))
 			#print("self.Bs: ", self.Bs)
 	
@@ -182,9 +187,9 @@ class lstm_policy_network:
 			target: [batch_size, slen]
 			target_gather: [batch_size, slen, 2], 2 is [batch_idx,target_elem]
 		'''
-		single_batch_assert = tf.Assert(tf.equal(batch_size, 1), [batch_size])
-		with tf.control_dependencies([single_batch_assert]):
-			encoder_outputs, encoder_states = self.encode(input_codes, batch_size)
+		#single_batch_assert = tf.Assert(tf.equal(batch_size, 1), [batch_size])
+		#with tf.control_dependencies([single_batch_assert]):
+		encoder_outputs, encoder_states = self.encode(input_codes, batch_size)
 		#encoder_states = self.init_state(batch_size)
 		outprob = 0 # tf.fill(tf.shape(target[:,0:1]), 1.)
 		outentropy = 0
@@ -198,8 +203,8 @@ class lstm_policy_network:
 			outprobs = tf.nn.softmax(output_logtis)
 			#mean_probs = self.AvgProbs[idx]
 			#mean_probs = tf.fill(tf.shape(outprobs),tf.reduce_mean(outprobs))
-			diff_arc_var += tf.reduce_mean(tf.square(outprobs[0] - self.AvgProbs[idx]))
-			state_ops.assign(self.AvgProbs[idx], 0.9 * self.AvgProbs[idx] + 0.1 * outprobs[0])
+			diff_arc_var += tf.reduce_mean(tf.square(outprobs - self.AvgProbs[idx]))
+			state_ops.assign(self.AvgProbs[idx], 0.9 * self.AvgProbs[idx] + 0.1 * tf.reduce_mean(outprobs))
 			#outprob *= outprobs[0,target[0, idx]]
 			#outentropy += tf.nn.softmax_cross_entropy_with_logits(labels=outprobs, logits=output_logtis)
 			outentropy += -tf.reduce_sum(outprobs * tf.log(outprobs), 1)
@@ -328,16 +333,25 @@ class train_optimizer_controller():
 		self.best_code = []
 		self.best_score = 0
 		self.best_reward = -1e8
-		self.episode_history = deque(maxlen=100)
+		self.episode_history = deque(maxlen=20)
+		self.input_history, self.opt_history = deque(maxlen=20), deque(maxlen=20)
 		self.global_idx = 0
+
+	def codes_distance(self, codes):
+		codes_array = np.array(codes)
+		mc = stats.mode(codes_array)[0]
+		mcs = np.repeat(mc, len(codes), axis=0)
+		return np.sum(np.not_equal(codes_array, mcs)) / ((codes_array.shape[0] - 1) * codes_array.shape[1] + 1e-8)
 
 	def train(self, verifier, sess):
 		for ep in range(EP_MAX):
 			buffer_sequences, buffer_reward = [], []
 			input_codes, sampled_sequences = [], []
+			sample_arc_one = sess.run(self.sample_arc_op)
+			sample_seq_one = self.ppo.choose_sequence([sample_arc_one], sess)[0]
 			for t in range(EP_LEN):
-				input_codes += [sess.run(self.sample_arc_op)]
-				sampled_sequences += [self.ppo.choose_sequence([input_codes[-1]], sess)[0]]
+				input_codes += [sample_arc_one]#[sess.run(self.sample_arc_op)]
+				sampled_sequences += [sample_seq_one]#[self.ppo.choose_sequence([input_codes[-1]], sess)[0]]
 			#sampled_sequences = self.ppo.choose_sequence(input_codes, sess)
 			for t in range(EP_LEN):
 				#score = dummyInputScore(input_codes[t])
@@ -349,6 +363,8 @@ class train_optimizer_controller():
 				buffer_reward.append(reward)
 				if t == EP_LEN - 1:
 					#pdb.set_trace()
+					self.input_history.extend(input_codes)
+					self.opt_history.extend(buffer_sequences)
 					batch_sequences, batch_rewards = np.vstack(buffer_sequences), np.vstack(buffer_reward)
 					input_codes = np.array(input_codes)
 					buffer_sequences, buffer_reward = [], []
@@ -361,11 +377,12 @@ class train_optimizer_controller():
 			if self.global_idx % 10 == 0: 
 				print(
 					'Ep: %i' % self.global_idx,
-					"|reward: %f" % reward,
-					"|sequence: %s" % str(sampled_sequence)
+					", Last 20 episodes| avg reward: %f" % mean_rewards,
+					"|architecture distance: %0.2f" % self.codes_distance(self.input_history),
+					"|opt codes distance: %0.2f" % self.codes_distance(self.opt_history)
 				)
-				if self.global_idx % 10 == 0:
-					print("Average reward for last 100 episodes: {:.2f}".format(mean_rewards))
+				#if self.global_idx % 10 == 0:
+				#	print("Last 20 episodesAverage reward for last 20 episodes: {:.2f}".format(mean_rewards))
 					#print("Best code {} | {} / rewards {}".format(', '.join([str(c) for c in self.best_code]), self.best_score, self.best_reward))
 
 	def sample_opt_op(self):

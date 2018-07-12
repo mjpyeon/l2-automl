@@ -5,3 +5,4 @@ learning-to-learn/cifar
 learning-to-learn/cifar10
 enas/outputs*
 enas/data
+darts/data

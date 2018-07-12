@@ -7,7 +7,7 @@ python src/cifar10/main.py \
   --search_for="macro" \
   --reset_output_dir \
   --data_path="data/cifar10" \
-  --output_dir="enaos_outputs_2" \
+  --output_dir="enaos_outputs_test3" \
   --saved_path='' \
   --batch_size=128 \
   --num_epochs=310 \

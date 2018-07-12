@@ -192,20 +192,20 @@ class GeneralChild(Model):
   def _model(self, images, is_training, reuse=False, is_valid=False):
     with tf.variable_scope(self.name, reuse=reuse):
       layers = []
-      if(is_valid):
-        self.valid_layers = []
+      if(is_training):
+        self.train_layers = []
       out_filters = self.out_filters
       with tf.variable_scope("stem_conv"):
         w = create_weight("w", [3, 3, 3, out_filters])
-        if(is_valid):
-            self.valid_layers.append(images)
+        if(is_training):
+            self.train_layers.append(images)
         x = tf.nn.conv2d(images, w, [1, 1, 1, 1], "SAME", data_format=self.data_format)
-        if(is_valid):
-            self.valid_layers.append(x)
+        if(is_training):
+            self.train_layers.append(x)
         x = batch_norm(x, is_training, data_format=self.data_format)
         layers.append(x)
-        if(is_valid):
-            self.valid_layers.append(x)
+        if(is_training):
+            self.train_layers.append(x)
 
       if self.whole_channels:
         start_idx = 0
@@ -218,8 +218,8 @@ class GeneralChild(Model):
           else:
             x = self._fixed_layer(layer_id, layers, start_idx, out_filters, is_training)
           layers.append(x)
-          if(is_valid):
-            self.valid_layers.append(x)
+          if(is_training):
+            self.train_layers.append(x)
           if layer_id in self.pool_layers:
             if self.fixed_arc is not None:
               out_filters *= 2
@@ -231,8 +231,8 @@ class GeneralChild(Model):
                     layer, out_filters, 2, is_training)
                 pooled_layers.append(x)
               layers = pooled_layers
-              if(is_valid):
-                self.valid_layers.extend(pooled_layers)
+              if(is_training):
+                self.train_layers.extend(pooled_layers)
         if self.whole_channels:
           start_idx += 1 + layer_id
         else:
@@ -240,8 +240,8 @@ class GeneralChild(Model):
         print(layers[-1])
 
       x = global_avg_pool(x, data_format=self.data_format)
-      if(is_valid):
-        self.valid_layers.append(x)
+      if(is_training):
+        self.train_layers.append(x)
       if is_training:
         x = tf.nn.dropout(x, self.keep_prob)
       with tf.variable_scope("fc"):
@@ -253,8 +253,8 @@ class GeneralChild(Model):
           raise ValueError("Unknown data_format {0}".format(self.data_format))
         w = create_weight("w", [inp_c, 10])
         x = tf.matmul(x, w)
-        if(is_valid):
-          self.valid_layers.append(x)
+        if(is_training):
+          self.train_layers.append(x)
     return x
 
   def _enas_layer(self, layer_id, prev_layers, start_idx, out_filters, is_training):
