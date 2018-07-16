@@ -8,15 +8,35 @@ import numpy as np
 import pdb
 
 class MetaOptimizer(optim.Optimizer):
-	def __init__(self, params, lr=1e-3):
+	def __init__(self, params, lr=2e-3, beta=None):
 		defaults = dict(lr=lr)
 		self.m_decay = 0.9
 		num_ops = [2,4]
 		self.beta = [Variable(1e-3*torch.randn(num_ops[i]).cuda(), requires_grad=True) for i in range(2)]
+		#self.beta[0].data = torch.Tensor([0.5,0.5]).cuda()
+		#self.beta[1].data = torch.Tensor([1,-1e8,-1e8,-1e8]).cuda()
+		if type(beta) != type(None):
+			for b, b_given in zip(self.beta, beta):
+				b.data = b_given.data
 		self.lr = Variable(torch.Tensor([1e-3]).cuda(), requires_grad=True)
 		self.sf = nn.Softmax(-1)
 		self.eps = 1e-8
 		super(MetaOptimizer, self).__init__(params, defaults)
+
+	def hard_operand(self, idx, ops):
+		return ops[idx]
+	def hard_unary(self, idx, input):
+		unary_funcs = {
+			0:lambda x:x,
+			1:lambda x:-x,
+			2:lambda x:torch.sqrt(x + self.eps),
+			3:lambda x:torch.sign(x)
+		}
+		return unary_funcs[idx](input)
+	def hard_graph(self, ops, code):
+		op1 = self.hard_operand(code[0], ops) # [1, dim]
+		u1 = self.hard_unary(code[1], op1) # [1, dim]
+		return u1
 
 	def ele_mul(self, b, a):
 		return (b * a.transpose(0, len(a.size())-1)).transpose(len(a.size())-1,0)
@@ -59,7 +79,7 @@ class MetaOptimizer(optim.Optimizer):
 
 				state['step'] += 1
 				# Decay the first moment running average coefficient
-				exp_avg.mul_(self.m_decay).add_(1 - self.m_decay, grad)
+				exp_avg.mul_(self.m_decay).add_(1, grad)
 				update = self.graph(torch.cat((grad.unsqueeze(0), state['exp_avg'].unsqueeze(0)), 0))
 				if DoUpdate:
 					p.data.add_(-group['lr'], update.data)	
@@ -71,8 +91,9 @@ if __name__ == '__main__':
 		x, y = tensor
 		return (1 - x) ** 2 + 100 * (y - x ** 2) ** 2
 	params = Variable(torch.Tensor([2, 1.5]).cuda(), requires_grad=True)
-	'''
+	#'''
 	optim = torch.optim.Adam([params], lr=1e-3)
+	#optim = torch.optim.SGD([params], lr=0.0001, momentum=0.9)
 	for i in range(2000):
 		optim.zero_grad()
 		loss = rosenbrock(params)
