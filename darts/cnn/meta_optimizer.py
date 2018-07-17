@@ -6,18 +6,19 @@ from torch.autograd import Variable
 import math
 import numpy as np
 import pdb
-
+torch.manual_seed(97)
 class MetaOptimizer(optim.Optimizer):
 	def __init__(self, params, lr=2e-3, beta=None):
 		defaults = dict(lr=lr)
 		self.m_decay = 0.9
-		num_ops = [2,4]
-		self.beta = [Variable(1e-3*torch.randn(num_ops[i]).cuda(), requires_grad=True) for i in range(2)]
+		self.vr_decay = 0.999
+		num_ops = [16,16,4,4,5]
+		self.beta = [Variable(1e-3*torch.randn(num_).cuda(), requires_grad=True) for num_ in num_ops]
 		#self.beta[0].data = torch.Tensor([0.5,0.5]).cuda()
 		#self.beta[1].data = torch.Tensor([1,-1e8,-1e8,-1e8]).cuda()
 		if type(beta) != type(None):
 			for b, b_given in zip(self.beta, beta):
-				b.data = b_given.data
+				b.data.copy_(b_given.data)
 		self.lr = Variable(torch.Tensor([1e-3]).cuda(), requires_grad=True)
 		self.sf = nn.Softmax(-1)
 		self.eps = 1e-8
@@ -42,20 +43,30 @@ class MetaOptimizer(optim.Optimizer):
 		return (b * a.transpose(0, len(a.size())-1)).transpose(len(a.size())-1,0)
 
 	def operand(self, beta, ops):
-		beta_ = self.sf(beta)
+		beta_ = self.sf(beta*100)
 		return self.ele_mul(beta_, ops).sum(0)
 
 	def unary(self, beta, input):
 		input = input.unsqueeze(0)
-		beta_ = self.sf(beta)
-		unary_funcs = torch.cat((input, -input, torch.sqrt(torch.abs(input) + self.eps), torch.sign(input)),0)
+		beta_ = self.sf(beta*100)
+		unary_funcs = torch.cat((input, -input, torch.sqrt(torch.abs(input) + 1e-12), torch.sign(input)),0)
 		return self.ele_mul(beta_, unary_funcs).sum(0)
+
+	def binary(self, beta, left, right):
+		beta_ = self.sf(beta*100)
+		left = left.unsqueeze(0)
+		right = right.unsqueeze(0)
+		binary_funcs = torch.cat((left+right,left-right, left*right,left/(right + self.eps), left), 0)
+		return self.ele_mul(beta_, binary_funcs).sum(0)
 
 	def graph(self, ops):
 		ops = torch.autograd.Variable(ops, requires_grad=False) # [num_ops, dim]
 		op1 = self.operand(self.beta[0], ops) # [1, dim]
-		u1 = self.unary(self.beta[1], op1) # [1, dim]
-		return u1
+		op2 = self.operand(self.beta[1], ops) # [1, dim]
+		u1 = self.unary(self.beta[2], op1) # [1, dim]
+		u2 = self.unary(self.beta[3], op2) # [1, dim]
+		b1 = self.binary(self.beta[4], u1, u2)
+		return b1
 
 	def step(self, DoUpdate=False, closure=None):
 		loss = None
@@ -73,14 +84,43 @@ class MetaOptimizer(optim.Optimizer):
 				if len(state) == 0:
 					state['step'] = 0
 					# Exponential moving average of gradient values
-					state['exp_avg'] = torch.zeros_like(p.data)
-
-				exp_avg = state['exp_avg']
+					state['m'] = torch.zeros_like(p.data)
+					state['m_py'] = torch.zeros_like(p.data)
+					state['v'] = torch.zeros_like(p.data)
+					state['r'] = torch.zeros_like(p.data)
+					state['constant1'] = torch.ones_like(p.data)
+					state['constant2'] = torch.ones_like(p.data) * 2
+					state['eps'] = torch.ones_like(p.data) * self.eps
 
 				state['step'] += 1
-				# Decay the first moment running average coefficient
-				exp_avg.mul_(self.m_decay).add_(1, grad)
-				update = self.graph(torch.cat((grad.unsqueeze(0), state['exp_avg'].unsqueeze(0)), 0))
+				# update operands
+				grad2 = grad * grad
+				grad3 = grad2 * grad
+				state['m'].mul_(self.m_decay).add_(1 - self.m_decay, grad)
+				state['m_py'].mul_(self.m_decay).add_(1, grad)
+				state['v'].mul_(self.vr_decay).add_(1 - self.vr_decay, grad2)
+				state['r'].mul_(self.vr_decay).add_(1 - self.vr_decay, grad3)
+
+				ops = [
+						grad,
+						grad2,
+						grad3,
+						state['m'],
+						state['m_py'],
+						state['v'],
+						state['r'],
+						torch.sign(grad),
+						torch.sign(state['m']),
+						state['constant1'],
+						state['constant2'],
+						state['eps'],
+						1e-4*p.data,
+						1e-3*p.data,
+						1e-2*p.data,
+						1e-1*p.data
+					]
+				ops = [op.unsqueeze(0) for op in ops]
+				update = self.graph(torch.cat(ops, 0))
 				if DoUpdate:
 					p.data.add_(-group['lr'], update.data)	
 				params_updates += [-group['lr'] * update]
