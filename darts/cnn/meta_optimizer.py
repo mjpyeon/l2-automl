@@ -12,8 +12,10 @@ class MetaOptimizer(optim.Optimizer):
 		defaults = dict(lr=lr)
 		self.m_decay = 0.9
 		self.vr_decay = 0.999
-		num_ops = [16,16,4,4,5]
-		self.beta = [Variable(1e-3*torch.randn(num_).cuda(), requires_grad=True) for num_ in num_ops]
+		self.num_ops = [16,16,4,4,5]
+		self.beta_scaling = 100
+		print('Beta scaling: {}, Meta opt graph: {}'.format(self.beta_scaling, self.num_ops))
+		self.beta = [Variable(8e-3*torch.randn(num_).cuda(), requires_grad=True) for num_ in self.num_ops]
 		#self.beta[0].data = torch.Tensor([0.5,0.5]).cuda()
 		#self.beta[1].data = torch.Tensor([1,-1e8,-1e8,-1e8]).cuda()
 		if type(beta) != type(None):
@@ -30,36 +32,48 @@ class MetaOptimizer(optim.Optimizer):
 		unary_funcs = {
 			0:lambda x:x,
 			1:lambda x:-x,
-			2:lambda x:torch.sqrt(x + self.eps),
+			2:lambda x:torch.sqrt(torch.abs(x) + self.eps),
 			3:lambda x:torch.sign(x)
 		}
 		return unary_funcs[idx](input)
+	def hard_binary(self, idx, left, right):
+		binary_funcs = {
+			0:lambda x,y:x+y,
+			1:lambda x,y:x-y,
+			2:lambda x,y:x*y,
+			3:lambda x,y:x/(y+self.eps)
+		}
+		return binary_funcs[idx](left, right)
 	def hard_graph(self, ops, code):
 		op1 = self.hard_operand(code[0], ops) # [1, dim]
-		u1 = self.hard_unary(code[1], op1) # [1, dim]
-		return u1
+		op2 = self.hard_operand(code[1], ops) # [1, dim]
+		u1 = self.hard_unary(code[2], op1) # [1, dim]
+		u2 = self.hard_unary(code[3], op2) # [1, dim]
+		b1 = self.hard_binary(code[4], u1, u2) # [1, dim]
+		return b1
 
 	def ele_mul(self, b, a):
 		return (b * a.transpose(0, len(a.size())-1)).transpose(len(a.size())-1,0)
 
 	def operand(self, beta, ops):
-		beta_ = self.sf(beta*100)
+		beta_ = self.sf(beta*self.beta_scaling)
 		return self.ele_mul(beta_, ops).sum(0)
 
 	def unary(self, beta, input):
 		input = input.unsqueeze(0)
-		beta_ = self.sf(beta*100)
+		beta_ = self.sf(beta*self.beta_scaling)
 		unary_funcs = torch.cat((input, -input, torch.sqrt(torch.abs(input) + 1e-12), torch.sign(input)),0)
 		return self.ele_mul(beta_, unary_funcs).sum(0)
 
 	def binary(self, beta, left, right):
-		beta_ = self.sf(beta*100)
+		beta_ = self.sf(beta*self.beta_scaling)
 		left = left.unsqueeze(0)
 		right = right.unsqueeze(0)
 		binary_funcs = torch.cat((left+right,left-right, left*right,left/(right + self.eps), left), 0)
 		return self.ele_mul(beta_, binary_funcs).sum(0)
 
 	def graph(self, ops):
+		#pdb.set_trace()
 		ops = torch.autograd.Variable(ops, requires_grad=False) # [num_ops, dim]
 		op1 = self.operand(self.beta[0], ops) # [1, dim]
 		op2 = self.operand(self.beta[1], ops) # [1, dim]
@@ -121,9 +135,10 @@ class MetaOptimizer(optim.Optimizer):
 					]
 				ops = [op.unsqueeze(0) for op in ops]
 				update = self.graph(torch.cat(ops, 0))
+				#update = self.hard_graph(torch.cat(ops, 0), [7, 2, 0, 2, 2])
 				if DoUpdate:
-					p.data.add_(-group['lr'], update.data)	
-				params_updates += [-group['lr'] * update]
+					p.data.add_(-self.lr.item(), update.data)	
+				params_updates += [-self.lr * update]
 		return params_updates
 
 if __name__ == '__main__':
@@ -131,7 +146,7 @@ if __name__ == '__main__':
 		x, y = tensor
 		return (1 - x) ** 2 + 100 * (y - x ** 2) ** 2
 	params = Variable(torch.Tensor([2, 1.5]).cuda(), requires_grad=True)
-	#'''
+	'''
 	optim = torch.optim.Adam([params], lr=1e-3)
 	#optim = torch.optim.SGD([params], lr=0.0001, momentum=0.9)
 	for i in range(2000):
@@ -142,17 +157,19 @@ if __name__ == '__main__':
 		if(i % 50 == 0):
 			print('i: {}, loss: {}'.format(i, loss.data[0]))
 	'''
-	meta_optim = MetaOptimizer([params])
-	optim = torch.optim.Adam(meta_optim.beta, lr=1e-3)
+	meta_optim = MetaOptimizer([params], lr=1e-3)
+	optim = torch.optim.Adam(meta_optim.beta + [meta_optim.lr], lr=1e-3)
 	new_params = params.clone()
 	for i in range(2000):
 		meta_optim.zero_grad()
 		loss = rosenbrock(params)
 		loss.backward()
+		grad_norm = nn.utils.clip_grad_norm([params], 10.)
 		params_updates = meta_optim.step(DoUpdate=(i % 2 == 0))
 		new_params += params_updates[0]
 		new_loss = rosenbrock(new_params)
 		new_loss.backward(retain_graph=True)
+		grad_norm = nn.utils.clip_grad_norm(meta_optim.beta, 1.)
 		optim.step()
 		if(i % 10 == 0):
 			new_params = params.clone()
@@ -161,6 +178,15 @@ if __name__ == '__main__':
 			print('i: {}, loss: {}, new loss: {}'.format(i, loss.item(), new_loss.item()))
 		if(i % 500 == 0):
 			print(meta_optim.beta)
+	params.data = torch.Tensor([2, 1.5]).cuda()
+	for i in range(2000):
+		loss = rosenbrock(params)
+		loss.backward()
+		grad_norm = nn.utils.clip_grad_norm([params], 10.)
+		params_updates = meta_optim.step(DoUpdate=(i % 2 == 0))
+		if(i % 50 == 0):
+			print('i: {}, loss: {}'.format(i, loss.item()))
+
 	#'''
 
 

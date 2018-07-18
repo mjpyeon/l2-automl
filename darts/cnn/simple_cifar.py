@@ -20,19 +20,26 @@ parser = argparse.ArgumentParser("cifar")
 parser.add_argument('--arch_weight_decay', type=float, default=0.1, help='weight decay for optim arch encoding')
 parser.add_argument('--arch_learning_rate', type=float, default=0.002, help='learning rate for arch encoding')
 parser.add_argument('--learning_rate', type=float, default=0.01, help='init learning rate')
+parser.add_argument('--batch_size', type=int, default=4, help='batch_size for training')
+parser.add_argument('--model_grad_norm', type=float, default=1.0, help='max grad norm for model')
+parser.add_argument('--beta_grad_norm', type=float, default=1.0, help='max grad norm for beta')
+parser.add_argument('--log_freq', type=int, default=50, help='logging frequency')
+parser.add_argument('--bptt_step', type=int, default=1, help='steps for bptt')
+parser.add_argument('--update_step', type=int, default=1, help='steps for update')
 args = parser.parse_args()
+print(args)
 transform = transforms.Compose(
     [transforms.ToTensor(),
      transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
 trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
                                         download=True, transform=transform)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=128,
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size,
                                           shuffle=False, num_workers=1)
 
 testset = torchvision.datasets.CIFAR10(root='./data', train=False,
                                        download=True, transform=transform)
-testloader = torch.utils.data.DataLoader(testset, batch_size=128,
+testloader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size,
                                          shuffle=False, num_workers=2)
 
 classes = ('plane', 'car', 'bird', 'cat',
@@ -137,11 +144,8 @@ def eval(model):
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(device)
 criterion = nn.CrossEntropyLoss()
-bptt_step = 1
-update_step = 1
-log_freq = 50
-config = 'opt graph [2,4] beta*100,beta is optimized, decouple update, exact bptt, post trainingng with learned beta'
-print('bptt_step: {}, update_step: {}, optim adam w decay/clip lr: {}, meta optim lr: {}'.format(bptt_step, update_step, args.arch_learning_rate, args.learning_rate))
+config = 'beta optimized, decouple update, exact bptt, post trainingng with learned beta'
+print('optim adam w decay/clip')
 print(config)
 old_beta = None
 #''' Train with our differentiable graph meta optimizer
@@ -152,7 +156,7 @@ for iteration in range(3):
         meta_optim = MetaOptimizer(model.parameters(), lr=args.learning_rate)
     else:
         meta_optim = MetaOptimizer(model.parameters(), lr=args.learning_rate, beta=old_beta)
-    optimizer = optim.Adam(meta_optim.beta, lr=args.arch_learning_rate, weight_decay=args.arch_weight_decay)
+    optimizer = optim.Adam(meta_optim.beta+[meta_optim.lr], lr=args.arch_learning_rate, weight_decay=args.arch_weight_decay)
     meta_helper.reset(model)
     #new_params = [p.clone() for p in net_params]
     #pdb.set_trace()
@@ -165,6 +169,7 @@ for iteration in range(3):
         running_loss = 0.0
         running_new_loss = 0.0
         loss_sum = 0.0
+        prev_loss_sum = loss_sum
         update_step_idx = 0
         for i, data in enumerate(trainloader, 0):
             # get the inputs
@@ -178,9 +183,9 @@ for iteration in range(3):
             outputs = model(inputs)
             loss = criterion(outputs, labels)
             loss.backward()
-            
+            grad_norm = nn.utils.clip_grad_norm(model.parameters(), args.model_grad_norm)
             params_updates = meta_optim.step()
-            params_updates = [torch.clamp(up, min=-0.1, max=0.1) for up in params_updates]
+            #params_updates = [torch.clamp(up, min=-0.1, max=0.1) for up in params_updates]
             model.zero_grad()
             meta_model = meta_helper.meta_update(model, params_updates)
             
@@ -189,7 +194,7 @@ for iteration in range(3):
             new_loss_delta = new_loss - sum(prev_new_loss)/len(prev_new_loss)
             loss_sum += new_loss_delta
             # update if loss gets smaller
-            if(update_step_idx >= update_step):
+            if(update_step_idx >= args.update_step):
                 meta_helper.update(model)
                 update_step_idx = 0
             update_step_idx += 1
@@ -197,16 +202,23 @@ for iteration in range(3):
             #new_loss.backward(retain_graph=True)
             #optimizer.step()
             prev_loss = new_loss.data
-            if((i+1) % bptt_step == 0):
+            if((i+1) % args.bptt_step == 0):
                 optimizer.zero_grad()
                 loss_sum.backward()
                 # normalize bptt gradient
                 for beta in meta_optim.beta:
-                    beta.grad /= bptt_step
-                    beta.grad = torch.clamp(beta.grad, min=-1, max=1)
-                #grad_norm = nn.utils.clip_grad_norm(meta_optim.beta, 10.)
+                   beta.grad /= args.bptt_step
+                   #beta.grad = torch.clamp(beta.grad, min=-1, max=1)
+                grad_norm = nn.utils.clip_grad_norm(meta_optim.beta, args.beta_grad_norm)
                 optimizer.step()
+                '''
+                # randomly change beta if loss gets worse
+                if loss_sum.item() > prev_loss_sum:
+                    for beta, num_ in zip(meta_optim.beta, meta_optim.num_ops):
+                        beta.data = 8e-3*torch.randn(num_).cuda()
+                '''
                 meta_helper.reset(model)
+                prev_loss_sum = loss_sum.item()
                 loss_sum = 0.0
                 #prev_loss = torch.zeros(1).cuda()
 
@@ -214,14 +226,15 @@ for iteration in range(3):
             running_loss += loss.item()
             prev_new_loss.append(new_loss.item())
             running_new_loss += new_loss.item()
-            if (i+1) % log_freq == 0:    # print every 2000 mini-batches
+            if (i+1) % args.log_freq == 0:    # print every 2000 mini-batches
                 print('[%d, %5d] loss: %.3f, new loss: %.3f' %
-                      (epoch + 1, i + 1, running_loss / log_freq, running_new_loss/log_freq))
+                      (epoch + 1, i + 1, running_loss / args.log_freq, running_new_loss/args.log_freq))
                 running_loss = 0.0
                 running_new_loss = 0.0
-            if (i) % log_freq == 0:
+            if (i) % args.log_freq == 0:
                 print('beta[0] abs mean: {}'.format(meta_optim.beta[0].abs().mean()))
                 #print(meta_optim.beta[0].data.cpu().numpy())
+            #pdb.set_trace()
         beta_code = [np.argmax(beta.data.cpu().numpy(), axis=0) for beta in meta_optim.beta]
         print('Greedy beta code: {}'.format(beta_code))
     old_beta = meta_optim.beta
@@ -233,7 +246,7 @@ for iteration in range(3):
 ''' Train with traditional optimizer
 print('Traditional Optimizer: SGD')
 model = Net().to(device)
-direct_optim = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+direct_optim = torch.optim.SGD(model.parameters(), lr=args.learning_rate)
 for epoch in range(2):
     running_loss = 0.0
     for i, data in enumerate(trainloader, 0):
@@ -244,11 +257,13 @@ for epoch in range(2):
         outputs = model(inputs)
         loss = criterion(outputs, labels)
         loss.backward()
+        for param in model.parameters():
+            param.grad = param.grad * torch.sqrt(torch.abs(param.grad))
         direct_optim.step()
         running_loss += loss.item()
-        if i % 2000 == 1999:    # print every 2000 mini-batches
+        if (i+1) % args.log_freq == 0:    # print every 2000 mini-batches
             print('[%d, %5d] loss: %.3f' %
-                  (epoch + 1, i + 1, running_loss / 2000))
+                  (epoch + 1, i + 1, running_loss / args.log_freq))
             running_loss = 0.0
 '''
 ''' Train with other's implementation of direct gradient meta optimizer
@@ -270,13 +285,13 @@ for epoch in range(2):  # loop over the dataset multiple times
         loss = criterion(outputs, labels)
         model.zero_grad()
         loss.backward()
-        meta_model = meta_optimizer.meta_update(model, loss.data, DoOverwrite=(i % update_step == 0))
+        meta_model = meta_optimizer.meta_update(model, loss.data, DoOverwrite=(i % args.update_step == 0))
         outputs = meta_model(inputs)
         new_loss = criterion(outputs, labels)
         #new_loss.backward(retain_graph=True)
         loss_sum += (new_loss - Variable(prev_loss))
         prev_loss = new_loss.data
-        if(i % bptt_step == 0):
+        if(i % args.bptt_step == 0):
             meta_optimizer.zero_grad()
             loss_sum.backward()
             for param in meta_optimizer.parameters():
@@ -292,6 +307,7 @@ for epoch in range(2):  # loop over the dataset multiple times
                   (epoch + 1, i + 1, running_loss / 2000, running_new_loss/2000))
             running_loss = 0.0
             running_new_loss = 0.0
+
 '''
 #print('Finished Training')
 #eval(model)
@@ -316,20 +332,21 @@ for epoch in range(3):
         outputs = second_model(inputs)
         loss = criterion(outputs, labels)
         loss.backward()
-        
+        grad_norm = nn.utils.clip_grad_norm(second_model.parameters(), args.model_grad_norm)
+
         params_updates = meta_optim.step()
-        params_updates = [torch.clamp(up, min=-0.1, max=0.1) for up in params_updates]
+        #params_updates = [torch.clamp(up, min=-0.1, max=0.1) for up in params_updates]
         second_model.zero_grad()
         meta_helper.meta_update(second_model, params_updates)
-        if(update_step_idx >= update_step):
+        if(update_step_idx >= args.update_step):
             meta_helper.update(second_model)
             update_step_idx = 0
         update_step_idx += 1
         meta_helper.reset(second_model)
         running_loss += loss.item()
-        if (i+1) % log_freq == 0:    # print every 2000 mini-batches
+        if (i+1) % args.log_freq == 0:    # print every 2000 mini-batches
                 print('[%d, %5d] loss: %.3f' %
-                      (epoch + 1, i + 1, running_loss / log_freq))
+                      (epoch + 1, i + 1, running_loss / args.log_freq))
                 print('beta[0] abs mean: {}'.format(meta_optim.beta[0].abs().mean()))
                 running_loss = 0.0
 eval(second_model)
