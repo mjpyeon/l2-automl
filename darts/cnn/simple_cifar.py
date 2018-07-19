@@ -25,7 +25,10 @@ parser.add_argument('--model_grad_norm', type=float, default=1.0, help='max grad
 parser.add_argument('--beta_grad_norm', type=float, default=1.0, help='max grad norm for beta')
 parser.add_argument('--log_freq', type=int, default=50, help='logging frequency')
 parser.add_argument('--bptt_step', type=int, default=1, help='steps for bptt')
-parser.add_argument('--update_step', type=int, default=1, help='steps for update')
+#parser.add_argument('--update_step', type=int, default=1, help='steps for update')
+parser.add_argument('--iteration', type=int, default=3, help='training iterations')
+parser.add_argument('--epoch', type=int, default=3, help='num of epoch for each training iteration and testing')
+parser.add_argument('--test_freq', type=int, default=10, help='frequency in epoch for running testing while training')
 args = parser.parse_args()
 print(args)
 transform = transforms.Compose(
@@ -150,7 +153,7 @@ print(config)
 old_beta = None
 #''' Train with our differentiable graph meta optimizer
 meta_helper = MetaHelper(MetaModel(Net().to(device)))
-for iteration in range(3):
+for iteration in range(args.iteration):
     model = Net().to(device)
     if type(old_beta) == type(None):
         meta_optim = MetaOptimizer(model.parameters(), lr=args.learning_rate)
@@ -165,12 +168,12 @@ for iteration in range(3):
     print('Greedy beta code: {}'.format(beta_code))
     prev_new_loss = deque(maxlen=100)
     prev_new_loss.append(2.2)
-    for epoch in range(3):  # loop over the dataset multiple times
+    for epoch in range(args.epoch):  # loop over the dataset multiple times
         running_loss = 0.0
         running_new_loss = 0.0
         loss_sum = 0.0
         prev_loss_sum = loss_sum
-        update_step_idx = 0
+        #update_step_idx = 0
         for i, data in enumerate(trainloader, 0):
             # get the inputs
             inputs, labels = data
@@ -183,7 +186,7 @@ for iteration in range(3):
             outputs = model(inputs)
             loss = criterion(outputs, labels)
             loss.backward()
-            grad_norm = nn.utils.clip_grad_norm(model.parameters(), args.model_grad_norm)
+            grad_norm = nn.utils.clip_grad_norm_(model.parameters(), args.model_grad_norm)
             params_updates = meta_optim.step()
             #params_updates = [torch.clamp(up, min=-0.1, max=0.1) for up in params_updates]
             model.zero_grad()
@@ -194,10 +197,10 @@ for iteration in range(3):
             new_loss_delta = new_loss - sum(prev_new_loss)/len(prev_new_loss)
             loss_sum += new_loss_delta
             # update if loss gets smaller
-            if(update_step_idx >= args.update_step):
-                meta_helper.update(model)
-                update_step_idx = 0
-            update_step_idx += 1
+            #if(update_step_idx >= args.update_step):
+            meta_helper.update(model)
+            #update_step_idx = 0
+            #update_step_idx += 1
             #optimizer.zero_grad()
             #new_loss.backward(retain_graph=True)
             #optimizer.step()
@@ -209,14 +212,14 @@ for iteration in range(3):
                 for beta in meta_optim.beta:
                    beta.grad /= args.bptt_step
                    #beta.grad = torch.clamp(beta.grad, min=-1, max=1)
-                grad_norm = nn.utils.clip_grad_norm(meta_optim.beta, args.beta_grad_norm)
+                grad_norm = nn.utils.clip_grad_norm_(meta_optim.beta, args.beta_grad_norm)
                 optimizer.step()
-                '''
+                
                 # randomly change beta if loss gets worse
-                if loss_sum.item() > prev_loss_sum:
-                    for beta, num_ in zip(meta_optim.beta, meta_optim.num_ops):
-                        beta.data = 8e-3*torch.randn(num_).cuda()
-                '''
+                #if loss_sum.item() > prev_loss_sum:
+                #    for beta, num_ in zip(meta_optim.beta, meta_optim.num_ops):
+                #        beta.data = 8e-3*torch.randn(num_).cuda()
+                
                 meta_helper.reset(model)
                 prev_loss_sum = loss_sum.item()
                 loss_sum = 0.0
@@ -237,6 +240,9 @@ for iteration in range(3):
             #pdb.set_trace()
         beta_code = [np.argmax(beta.data.cpu().numpy(), axis=0) for beta in meta_optim.beta]
         print('Greedy beta code: {}'.format(beta_code))
+        if (epoch+1) % args.test_freq == 0:
+            print('Run Testing')
+            eval(model)
     old_beta = meta_optim.beta
     print('Finished Training')
     print('beta[0] abs mean: {}'.format(meta_optim.beta[0].abs().mean()))
@@ -246,8 +252,8 @@ for iteration in range(3):
 ''' Train with traditional optimizer
 print('Traditional Optimizer: SGD')
 model = Net().to(device)
-direct_optim = torch.optim.SGD(model.parameters(), lr=args.learning_rate)
-for epoch in range(2):
+direct_optim = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+for epoch in range(args.epoch):
     running_loss = 0.0
     for i, data in enumerate(trainloader, 0):
         inputs, labels = data
@@ -265,6 +271,9 @@ for epoch in range(2):
             print('[%d, %5d] loss: %.3f' %
                   (epoch + 1, i + 1, running_loss / args.log_freq))
             running_loss = 0.0
+    if (epoch+1) % args.test_freq == 0:
+        print('Run Testing')
+        eval(model)
 '''
 ''' Train with other's implementation of direct gradient meta optimizer
 meta_model = Net().to(device)
@@ -319,8 +328,8 @@ second_model = Net().to(device)
 meta_optim = MetaOptimizer(second_model.parameters(), beta=old_beta)
 #meta_helper = MetaHelper(MetaModel(Net().to(device)))
 meta_helper.reset(second_model)
-update_step_idx = 0
-for epoch in range(3):
+#update_step_idx = 0
+for epoch in range(args.epoch):
     running_loss = 0.0
     for i, data in enumerate(trainloader, 0):
         inputs, labels = data
@@ -332,16 +341,16 @@ for epoch in range(3):
         outputs = second_model(inputs)
         loss = criterion(outputs, labels)
         loss.backward()
-        grad_norm = nn.utils.clip_grad_norm(second_model.parameters(), args.model_grad_norm)
+        grad_norm = nn.utils.clip_grad_norm_(second_model.parameters(), args.model_grad_norm)
 
         params_updates = meta_optim.step()
         #params_updates = [torch.clamp(up, min=-0.1, max=0.1) for up in params_updates]
         second_model.zero_grad()
         meta_helper.meta_update(second_model, params_updates)
-        if(update_step_idx >= args.update_step):
-            meta_helper.update(second_model)
-            update_step_idx = 0
-        update_step_idx += 1
+        #if(update_step_idx >= args.update_step):
+        meta_helper.update(second_model)
+        #update_step_idx = 0
+        #update_step_idx += 1
         meta_helper.reset(second_model)
         running_loss += loss.item()
         if (i+1) % args.log_freq == 0:    # print every 2000 mini-batches
@@ -349,5 +358,8 @@ for epoch in range(3):
                       (epoch + 1, i + 1, running_loss / args.log_freq))
                 print('beta[0] abs mean: {}'.format(meta_optim.beta[0].abs().mean()))
                 running_loss = 0.0
+    if (epoch+1) % args.test_freq == 0:
+        print('Run Testing')
+        eval(second_model)
 eval(second_model)
 #'''

@@ -12,7 +12,7 @@ class MetaOptimizer(optim.Optimizer):
 		defaults = dict(lr=lr)
 		self.m_decay = 0.9
 		self.vr_decay = 0.999
-		self.num_ops = [16,16,4,4,5]
+		self.num_ops = [16,16,4,4,5]# + [17,17,4,4,5] + [18,18,4,4,5] + [19,19,4,4,5]
 		self.beta_scaling = 100
 		print('Beta scaling: {}, Meta opt graph: {}'.format(self.beta_scaling, self.num_ops))
 		self.beta = [Variable(8e-3*torch.randn(num_).cuda(), requires_grad=True) for num_ in self.num_ops]
@@ -21,7 +21,7 @@ class MetaOptimizer(optim.Optimizer):
 		if type(beta) != type(None):
 			for b, b_given in zip(self.beta, beta):
 				b.data.copy_(b_given.data)
-		self.lr = Variable(torch.Tensor([1e-3]).cuda(), requires_grad=True)
+		self.lr = Variable(torch.Tensor([lr]).cuda(), requires_grad=True)
 		self.sf = nn.Softmax(-1)
 		self.eps = 1e-8
 		super(MetaOptimizer, self).__init__(params, defaults)
@@ -62,14 +62,16 @@ class MetaOptimizer(optim.Optimizer):
 	def unary(self, beta, input):
 		input = input.unsqueeze(0)
 		beta_ = self.sf(beta*self.beta_scaling)
-		unary_funcs = torch.cat((input, -input, torch.sqrt(torch.abs(input) + 1e-12), torch.sign(input)),0)
+		unary_funcs = torch.cat((input, -input, torch.sqrt(torch.abs(input) + 1e-12), torch.sign(input)), 0)#,
+								#torch.log(torch.abs(input)), torch.exp(input.clamp(max=5))),0)
 		return self.ele_mul(beta_, unary_funcs).sum(0)
 
 	def binary(self, beta, left, right):
 		beta_ = self.sf(beta*self.beta_scaling)
 		left = left.unsqueeze(0)
 		right = right.unsqueeze(0)
-		binary_funcs = torch.cat((left+right,left-right, left*right,left/(right + self.eps), left), 0)
+		binary_funcs = torch.cat((left+right,left-right, left*right,left/(right + self.eps), left),0)#, 
+									#torch.abs(left).pow(right.clamp(max=5))), 0)
 		return self.ele_mul(beta_, binary_funcs).sum(0)
 
 	def graph(self, ops):
@@ -81,6 +83,16 @@ class MetaOptimizer(optim.Optimizer):
 		u2 = self.unary(self.beta[3], op2) # [1, dim]
 		b1 = self.binary(self.beta[4], u1, u2)
 		return b1
+
+	def hierarchical_graph(self, ops):
+		g1 = self.graph(ops)
+		ops = torch.cat([ops,g1.unsqueeze(0)])
+		g2 = self.graph(ops)
+		ops = torch.cat([ops,g2.unsqueeze(0)])
+		g3 = self.graph(ops)
+		ops = torch.cat([ops,g3.unsqueeze(0)])
+		g4 = self.graph(ops)
+		return g4
 
 	def step(self, DoUpdate=False, closure=None):
 		loss = None
@@ -158,32 +170,59 @@ if __name__ == '__main__':
 			print('i: {}, loss: {}'.format(i, loss.data[0]))
 	'''
 	meta_optim = MetaOptimizer([params], lr=1e-3)
-	optim = torch.optim.Adam(meta_optim.beta + [meta_optim.lr], lr=1e-3)
+	optim = torch.optim.Adam(meta_optim.beta, lr=1e-3)
+	best_params = params.data.clone()
 	new_params = params.clone()
+	running_loss, best_running_loss = 0.0, 1e8
+	loss_sum = 0.0
+	prev_loss = 0.0
+	bptt_step = 10
 	for i in range(2000):
 		meta_optim.zero_grad()
 		loss = rosenbrock(params)
 		loss.backward()
-		grad_norm = nn.utils.clip_grad_norm([params], 10.)
-		params_updates = meta_optim.step(DoUpdate=(i % 2 == 0))
-		new_params += params_updates[0]
+		grad_norm = nn.utils.clip_grad_norm_([params], 10.)
+		params_updates = meta_optim.step(DoUpdate=(i % 1 == 0))
+		#pdb.set_trace()
+		new_params = new_params + params_updates[0]
 		new_loss = rosenbrock(new_params)
-		new_loss.backward(retain_graph=True)
-		grad_norm = nn.utils.clip_grad_norm(meta_optim.beta, 1.)
-		optim.step()
-		if(i % 10 == 0):
-			new_params = params.clone()
-			optim.zero_grad()
-		if(i % 50 == 0):
+		loss_sum += new_loss - prev_loss
+		prev_loss = new_loss.item()
+		running_loss += loss.item()
+		#new_loss.backward(retain_graph=True)
+		if((i+1) % 1 == 0):
 			print('i: {}, loss: {}, new loss: {}'.format(i, loss.item(), new_loss.item()))
-		if(i % 500 == 0):
+
+		if((i+1) % bptt_step == 0):
+			loss_sum.backward()
+			for beta in meta_optim.beta:
+				beta.grad /= bptt_step
+			grad_norm = nn.utils.clip_grad_norm_(meta_optim.beta, 1.)
+			optim.step()
+			optim.zero_grad()
+			#pdb.set_trace()
+			# if this bptt loss is much higher than last time, restore model
+			if(running_loss > 2*best_running_loss):
+				params.data.copy_(best_params)
+				print('restoring back up')
+				pdb.set_trace()
+			# else this update looks fine, set backup to this params
+			else:
+				if(running_loss < best_running_loss):
+					best_running_loss = running_loss
+				best_params.copy_(params.data)
+				print('setting backup params')
+			new_params = params.clone()
+			running_loss, loss_sum = 0.0, 0.0
+
+		if((i+1) % 500 == 0):
 			print(meta_optim.beta)
 	params.data = torch.Tensor([2, 1.5]).cuda()
 	for i in range(2000):
 		loss = rosenbrock(params)
 		loss.backward()
-		grad_norm = nn.utils.clip_grad_norm([params], 10.)
-		params_updates = meta_optim.step(DoUpdate=(i % 2 == 0))
+		grad_norm = nn.utils.clip_grad_norm_([params], 10.)
+		params_updates = meta_optim.step(DoUpdate=(i % 1 == 0))
 		if(i % 50 == 0):
 			print('i: {}, loss: {}'.format(i, loss.item()))
 
