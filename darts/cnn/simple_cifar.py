@@ -10,16 +10,19 @@ from torch.autograd import Variable
 import numpy as np
 from meta_optimizer import MetaOptimizer
 import meta_optimizer_gbg as meta_gbg
+from vgg_model import VGG
 from operator import mul
 from collections import deque
+import copy
 import argparse
+import math
 import pdb
-
-torch.manual_seed(97)
+torch.backends.cudnn.deterministic = True
+torch.manual_seed(977)
 parser = argparse.ArgumentParser("cifar")
 parser.add_argument('--arch_weight_decay', type=float, default=0.1, help='weight decay for optim arch encoding')
 parser.add_argument('--arch_learning_rate', type=float, default=0.002, help='learning rate for arch encoding')
-parser.add_argument('--learning_rate', type=float, default=0.01, help='init learning rate')
+parser.add_argument('--learning_rate', type=float, default=1e-3, help='init learning rate')
 parser.add_argument('--batch_size', type=int, default=4, help='batch_size for training')
 parser.add_argument('--model_grad_norm', type=float, default=1.0, help='max grad norm for model')
 parser.add_argument('--beta_grad_norm', type=float, default=1.0, help='max grad norm for beta')
@@ -29,6 +32,7 @@ parser.add_argument('--bptt_step', type=int, default=1, help='steps for bptt')
 parser.add_argument('--iteration', type=int, default=3, help='training iterations')
 parser.add_argument('--epoch', type=int, default=3, help='num of epoch for each training iteration and testing')
 parser.add_argument('--test_freq', type=int, default=10, help='frequency in epoch for running testing while training')
+parser.add_argument('--save_path', type=str, default='', help='folder path to save trained model & meta optim')
 args = parser.parse_args()
 print(args)
 transform = transforms.Compose(
@@ -53,14 +57,26 @@ class MetaModel:
         self.model = model
     def detach(self):
         for module in self.model.children():
-            if(len(module._parameters) > 0):
+            if type(module) == torch.nn.modules.container.Sequential:
+                seq_module = module
+                for i, module in enumerate(seq_module):
+                    if(len(module._parameters) > 0):
+                        module._parameters['weight'] = module._parameters['weight'].detach()
+                        module._parameters['bias'] = module._parameters['bias'].detach()
+            elif(len(module._parameters) > 0):
                 module._parameters['weight'] = module._parameters['weight'].detach()
                 module._parameters['bias'] = module._parameters['bias'].detach()
     def get_flat_params(self):
         params = []
 
         for module in self.model.children():
-            if len(module._parameters) > 0:
+            if type(module) == torch.nn.modules.container.Sequential:
+                seq_module = module
+                for i, module in enumerate(seq_module):
+                    if len(module._parameters) > 0:
+                        params.append(module._parameters['weight'].view(-1))
+                        params.append(module._parameters['bias'].view(-1))
+            elif len(module._parameters) > 0:
                 params.append(module._parameters['weight'].view(-1))
                 params.append(module._parameters['bias'].view(-1))
         return torch.cat(params)
@@ -69,7 +85,23 @@ class MetaModel:
         # Restore original shapes
         offset = 0
         for i, module in enumerate(self.model.children()):
-            if(len(module._parameters) > 0):
+            if type(module) == torch.nn.modules.container.Sequential:
+                seq_module = module
+                for i, module in enumerate(seq_module):
+                    if(len(module._parameters) > 0):
+                        weight_shape = module._parameters['weight'].size()
+                        bias_shape = module._parameters['bias'].size()
+
+                        weight_flat_size = reduce(mul, weight_shape, 1)
+                        bias_flat_size = reduce(mul, bias_shape, 1)
+
+                        module._parameters['weight'] = flat_params[
+                            offset:offset + weight_flat_size].view(*weight_shape)
+                        module._parameters['bias'] = flat_params[
+                            offset + weight_flat_size:offset + weight_flat_size + bias_flat_size].view(*bias_shape)
+
+                        offset += weight_flat_size + bias_flat_size
+            elif(len(module._parameters) > 0):
                 weight_shape = module._parameters['weight'].size()
                 bias_shape = module._parameters['bias'].size()
 
@@ -92,8 +124,11 @@ class MetaModel:
 
 
 class MetaHelper(nn.Module):
-    def __init__(self, model):
+    def __init__(self, model, backup_model):
+        super(MetaHelper, self).__init__()
         self.meta_model = model
+        self.backup_model = backup_model
+        self.backup_loss = None
     def reset(self, model):
         self.meta_model.detach()
         self.meta_model.model.zero_grad()
@@ -108,7 +143,24 @@ class MetaHelper(nn.Module):
         new_flat_params = new_flat_params.view(-1)
         self.meta_model.set_flat_params(new_flat_params)
         return self.meta_model.model
+    def check_backup_and_reset(self,model,loss):
+        # if first backup or loss is better than best loss, update backup to this 
+        if(type(self.backup_loss) == type(None) or loss < self.backup_loss):
+            self.reset(model)
+            self.update(self.backup_model)
+            self.backup_loss = loss
+            #print('resetting backup')
+        # else if loss is much worse than backup loss, restore
+        elif(loss > 2*self.backup_loss):
+            print('restoring backup')
+            self.reset(self.backup_model)
+            self.update(model)
+        # else the loss is still okay, just reset model
+        else:
+            self.reset(model)
 
+
+#'''
 class Net(nn.Module):
     def __init__(self):
         super(Net, self).__init__()
@@ -118,7 +170,6 @@ class Net(nn.Module):
         self.fc1 = nn.Linear(16 * 5 * 5, 120)
         self.fc2 = nn.Linear(120, 84)
         self.fc3 = nn.Linear(84, 10)
-
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
@@ -127,7 +178,8 @@ class Net(nn.Module):
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         return x
-
+#'''
+#Net = lambda: VGG('VGG16')
 def eval(model):
     correct = 0
     total = 0
@@ -151,8 +203,10 @@ config = 'beta optimized, decouple update, exact bptt, post trainingng with lear
 print('optim adam w decay/clip')
 print(config)
 old_beta = None
+#for i in range(1):
+#    dummy = Net()
 #''' Train with our differentiable graph meta optimizer
-meta_helper = MetaHelper(MetaModel(Net().to(device)))
+meta_helper = MetaHelper(MetaModel(Net().to(device)), Net().to(device))
 for iteration in range(args.iteration):
     model = Net().to(device)
     if type(old_beta) == type(None):
@@ -163,16 +217,15 @@ for iteration in range(args.iteration):
     meta_helper.reset(model)
     #new_params = [p.clone() for p in net_params]
     #pdb.set_trace()
-    prev_loss = torch.zeros(1).cuda()
     beta_code = [np.argmax(beta.data.cpu().numpy(), axis=0) for beta in meta_optim.beta]
     print('Greedy beta code: {}'.format(beta_code))
     prev_new_loss = deque(maxlen=100)
     prev_new_loss.append(2.2)
     for epoch in range(args.epoch):  # loop over the dataset multiple times
         running_loss = 0.0
+        bptt_loss_sum = 0.0
         running_new_loss = 0.0
         loss_sum = 0.0
-        prev_loss_sum = loss_sum
         #update_step_idx = 0
         for i, data in enumerate(trainloader, 0):
             # get the inputs
@@ -187,48 +240,54 @@ for iteration in range(args.iteration):
             loss = criterion(outputs, labels)
             loss.backward()
             grad_norm = nn.utils.clip_grad_norm_(model.parameters(), args.model_grad_norm)
+            if any(param.grad.min().item() > 1e30 for param in model.parameters()):
+                print('nan gradient encountered')
+                pdb.set_trace()
             params_updates = meta_optim.step()
-            #params_updates = [torch.clamp(up, min=-0.1, max=0.1) for up in params_updates]
             model.zero_grad()
             meta_model = meta_helper.meta_update(model, params_updates)
             
             outputs = meta_model(inputs)
             new_loss = criterion(outputs, labels)
+            if(math.isnan(new_loss.item())):
+                print('nan new loss')
+                pdb.set_trace()
             new_loss_delta = new_loss - sum(prev_new_loss)/len(prev_new_loss)
             loss_sum += new_loss_delta
-            # update if loss gets smaller
-            #if(update_step_idx >= args.update_step):
+            ## update if loss gets smaller
             meta_helper.update(model)
-            #update_step_idx = 0
-            #update_step_idx += 1
-            #optimizer.zero_grad()
-            #new_loss.backward(retain_graph=True)
-            #optimizer.step()
-            prev_loss = new_loss.data
+
+            # print statistics
+            running_loss += loss.item()
+            bptt_loss_sum += loss.item()
+            if not math.isnan(new_loss.item()):
+                prev_new_loss.append(new_loss.item())
+            running_new_loss += new_loss.item()
             if((i+1) % args.bptt_step == 0):
                 optimizer.zero_grad()
                 loss_sum.backward()
                 # normalize bptt gradient
                 for beta in meta_optim.beta:
                    beta.grad /= args.bptt_step
-                   #beta.grad = torch.clamp(beta.grad, min=-1, max=1)
+                meta_optim.lr.grad /= args.bptt_step
+                if(any(torch.isnan(beta.grad).max() for beta in meta_optim.beta) or math.isnan(meta_optim.lr.grad.item())): 
+                    print('beta/lr nan')
+                    optimizer.zero_grad()
+
                 grad_norm = nn.utils.clip_grad_norm_(meta_optim.beta, args.beta_grad_norm)
                 optimizer.step()
-                
                 # randomly change beta if loss gets worse
                 #if loss_sum.item() > prev_loss_sum:
                 #    for beta, num_ in zip(meta_optim.beta, meta_optim.num_ops):
                 #        beta.data = 8e-3*torch.randn(num_).cuda()
-                
-                meta_helper.reset(model)
-                prev_loss_sum = loss_sum.item()
-                loss_sum = 0.0
-                #prev_loss = torch.zeros(1).cuda()
-
-            # print statistics
-            running_loss += loss.item()
-            prev_new_loss.append(new_loss.item())
-            running_new_loss += new_loss.item()
+                if (math.isnan(new_loss.item())):
+                    bptt_loss_sum = 1e12
+                meta_helper.check_backup_and_reset(model, bptt_loss_sum)
+                if(any(torch.isnan(beta).max() for beta in meta_optim.beta) or math.isnan(meta_optim.lr.item())): 
+                    print('beta/lr nan')
+                    pdb.set_trace()
+                #meta_helper.reset(model)
+                loss_sum, bptt_loss_sum = 0.0, 0.0
             if (i+1) % args.log_freq == 0:    # print every 2000 mini-batches
                 print('[%d, %5d] loss: %.3f, new loss: %.3f' %
                       (epoch + 1, i + 1, running_loss / args.log_freq, running_new_loss/args.log_freq))
@@ -236,13 +295,16 @@ for iteration in range(args.iteration):
                 running_new_loss = 0.0
             if (i) % args.log_freq == 0:
                 print('beta[0] abs mean: {}'.format(meta_optim.beta[0].abs().mean()))
-                #print(meta_optim.beta[0].data.cpu().numpy())
-            #pdb.set_trace()
+
         beta_code = [np.argmax(beta.data.cpu().numpy(), axis=0) for beta in meta_optim.beta]
         print('Greedy beta code: {}'.format(beta_code))
         if (epoch+1) % args.test_freq == 0:
             print('Run Testing')
             eval(model)
+            if args.save_path != '':
+                torch.save(model, args.save_path+'/model_iter'+str(iteration))
+                torch.save(model, args.save_path+'/meta_optim_iter'+str(iteration))
+                print('Saving to {}'.format(args.save_path))
     old_beta = meta_optim.beta
     print('Finished Training')
     print('beta[0] abs mean: {}'.format(meta_optim.beta[0].abs().mean()))
@@ -250,7 +312,7 @@ for iteration in range(args.iteration):
 
 #'''
 ''' Train with traditional optimizer
-print('Traditional Optimizer: SGD')
+print('Traditional Optimizer: Adam')
 model = Net().to(device)
 direct_optim = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
 for epoch in range(args.epoch):
@@ -274,50 +336,7 @@ for epoch in range(args.epoch):
     if (epoch+1) % args.test_freq == 0:
         print('Run Testing')
         eval(model)
-'''
-''' Train with other's implementation of direct gradient meta optimizer
-meta_model = Net().to(device)
-meta_optimizer = meta_gbg.MetaOptimizer(meta_gbg.MetaModel(meta_model), 2, 10).to(device)
-optimizer = optim.Adam(meta_optimizer.parameters(), lr=1e-3)
-model = Net().to(device)
-loss_sum = 0.0
-running_loss, running_new_loss = 0.0, 0.0
-prev_loss = torch.zeros(1).cuda()
-meta_optimizer.reset_lstm(keep_states=False, model=model, use_cuda=True)
-for epoch in range(2):  # loop over the dataset multiple times
-    for i, data in enumerate(trainloader, 0):
-        # get the inputs
-        inputs, labels = data
-        inputs, labels = inputs.to(device), labels.to(device)
-        # zero the parameter gradients
-        outputs = model(inputs)
-        loss = criterion(outputs, labels)
-        model.zero_grad()
-        loss.backward()
-        meta_model = meta_optimizer.meta_update(model, loss.data, DoOverwrite=(i % args.update_step == 0))
-        outputs = meta_model(inputs)
-        new_loss = criterion(outputs, labels)
-        #new_loss.backward(retain_graph=True)
-        loss_sum += (new_loss - Variable(prev_loss))
-        prev_loss = new_loss.data
-        if(i % args.bptt_step == 0):
-            meta_optimizer.zero_grad()
-            loss_sum.backward()
-            for param in meta_optimizer.parameters():
-                param.grad.data.clamp_(-1, 1)
-            optimizer.step()
-            meta_optimizer.reset_lstm(
-                    keep_states=i > 0, model=model, use_cuda=True)
-            loss_sum = 0.0
-        running_loss += loss.item()
-        running_new_loss += new_loss.item()
-        if i % 2000 == 1999:    # print every 2000 mini-batches
-            print('[%d, %5d] loss: %.3f, new loss: %.3f' %
-                  (epoch + 1, i + 1, running_loss / 2000, running_new_loss/2000))
-            running_loss = 0.0
-            running_new_loss = 0.0
-
-'''
+#'''
 #print('Finished Training')
 #eval(model)
 #eval(meta_model)

@@ -6,16 +6,18 @@ from torch.autograd import Variable
 import math
 import numpy as np
 import pdb
-torch.manual_seed(97)
+torch.manual_seed(977)
 class MetaOptimizer(optim.Optimizer):
 	def __init__(self, params, lr=2e-3, beta=None):
-		defaults = dict(lr=lr)
+		defaults = dict()
 		self.m_decay = 0.9
 		self.vr_decay = 0.999
-		self.num_ops = [16,16,4,4,5]# + [17,17,4,4,5] + [18,18,4,4,5] + [19,19,4,4,5]
+		self.num_ops = [16,16,4,4,5] + [17,17,4,4,5] + [18,18,4,4,5] + [19,19,4,4,5]
 		self.beta_scaling = 100
 		print('Beta scaling: {}, Meta opt graph: {}'.format(self.beta_scaling, self.num_ops))
 		self.beta = [Variable(8e-3*torch.randn(num_).cuda(), requires_grad=True) for num_ in self.num_ops]
+		#self.backup_beta_data = [self.beta[i].data.clone() for i in range(len(self.beta))]
+		self.loss_check = 1e8
 		#self.beta[0].data = torch.Tensor([0.5,0.5]).cuda()
 		#self.beta[1].data = torch.Tensor([1,-1e8,-1e8,-1e8]).cuda()
 		if type(beta) != type(None):
@@ -74,24 +76,28 @@ class MetaOptimizer(optim.Optimizer):
 									#torch.abs(left).pow(right.clamp(max=5))), 0)
 		return self.ele_mul(beta_, binary_funcs).sum(0)
 
-	def graph(self, ops):
+	def graph(self, ops, start=0):
 		#pdb.set_trace()
-		ops = torch.autograd.Variable(ops, requires_grad=False) # [num_ops, dim]
-		op1 = self.operand(self.beta[0], ops) # [1, dim]
-		op2 = self.operand(self.beta[1], ops) # [1, dim]
-		u1 = self.unary(self.beta[2], op1) # [1, dim]
-		u2 = self.unary(self.beta[3], op2) # [1, dim]
-		b1 = self.binary(self.beta[4], u1, u2)
+		#ops = torch.autograd.Variable(ops, requires_grad=False) # [num_ops, dim]
+		op1 = self.operand(self.beta[start+0], ops) # [1, dim]
+		op2 = self.operand(self.beta[start+1], ops) # [1, dim]
+		u1 = self.unary(self.beta[start+2], op1) # [1, dim]
+		u2 = self.unary(self.beta[start+3], op2) # [1, dim]
+		b1 = self.binary(self.beta[start+4], u1, u2)
 		return b1
 
 	def hierarchical_graph(self, ops):
-		g1 = self.graph(ops)
+		ops = torch.autograd.Variable(ops, requires_grad=False) # [num_ops, dim]
+		g1 = self.graph(ops, 0)
 		ops = torch.cat([ops,g1.unsqueeze(0)])
-		g2 = self.graph(ops)
+		g2 = self.graph(ops, 5)
 		ops = torch.cat([ops,g2.unsqueeze(0)])
-		g3 = self.graph(ops)
+		g3 = self.graph(ops, 10)
 		ops = torch.cat([ops,g3.unsqueeze(0)])
-		g4 = self.graph(ops)
+		g4 = self.graph(ops, 15)
+		if(g4.min().item() > 1e30):
+			print('g4 nan')
+			pdb.set_trace()
 		return g4
 
 	def step(self, DoUpdate=False, closure=None):
@@ -146,7 +152,7 @@ class MetaOptimizer(optim.Optimizer):
 						1e-1*p.data
 					]
 				ops = [op.unsqueeze(0) for op in ops]
-				update = self.graph(torch.cat(ops, 0))
+				update = self.hierarchical_graph(torch.cat(ops, 0))
 				#update = self.hard_graph(torch.cat(ops, 0), [7, 2, 0, 2, 2])
 				if DoUpdate:
 					p.data.add_(-self.lr.item(), update.data)	
