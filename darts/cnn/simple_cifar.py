@@ -11,11 +11,15 @@ import numpy as np
 from meta_optimizer import MetaOptimizer
 import meta_optimizer_gbg as meta_gbg
 from vgg_model import VGG
+from dpn import DPN92
 from operator import mul
 from collections import deque
 import copy
 import argparse
 import math
+from model import NetworkCIFAR as Network
+from mobile_net import MobileNetV2
+import genotypes
 import pdb
 torch.backends.cudnn.deterministic = True
 torch.manual_seed(977)
@@ -33,6 +37,12 @@ parser.add_argument('--iteration', type=int, default=3, help='training iteration
 parser.add_argument('--epoch', type=int, default=3, help='num of epoch for each training iteration and testing')
 parser.add_argument('--test_freq', type=int, default=10, help='frequency in epoch for running testing while training')
 parser.add_argument('--save_path', type=str, default='', help='folder path to save trained model & meta optim')
+parser.add_argument('--arch', type=str, default='DARTS', help='which architecture to use')
+parser.add_argument('--init_channels', type=int, default=36, help='num of init channels')
+parser.add_argument('--layers', type=int, default=20, help='total number of layers')
+parser.add_argument('--auxiliary', action='store_true', default=False, help='use auxiliary tower')
+parser.add_argument('--drop_path_prob', type=float, default=0.2, help='drop path probability')
+parser.add_argument('--use_darts_arch', action='store_true', default=False, help='use darts architecture')
 args = parser.parse_args()
 print(args)
 transform = transforms.Compose(
@@ -56,65 +66,48 @@ class MetaModel:
     def __init__(self, model):
         self.model = model
     def detach(self):
-        for module in self.model.children():
-            if type(module) == torch.nn.modules.container.Sequential:
-                seq_module = module
-                for i, module in enumerate(seq_module):
-                    if(len(module._parameters) > 0):
-                        module._parameters['weight'] = module._parameters['weight'].detach()
-                        module._parameters['bias'] = module._parameters['bias'].detach()
-            elif(len(module._parameters) > 0):
-                module._parameters['weight'] = module._parameters['weight'].detach()
-                module._parameters['bias'] = module._parameters['bias'].detach()
+        def _iter_child(parent_module):
+            for i, module in enumerate(parent_module.children()):
+                # if has sub modules
+                if(len(module._modules) > 0):
+                    _iter_child(module)
+                elif len(module._parameters) > 0:
+                    for key,param in module._parameters.items():
+                        if(type(param) != type(None)):
+                            module._parameters[key] = param.detach()
+        _iter_child(self.model)            
+        
     def get_flat_params(self):
         params = []
-
-        for module in self.model.children():
-            if type(module) == torch.nn.modules.container.Sequential:
-                seq_module = module
-                for i, module in enumerate(seq_module):
-                    if len(module._parameters) > 0:
-                        params.append(module._parameters['weight'].view(-1))
-                        params.append(module._parameters['bias'].view(-1))
-            elif len(module._parameters) > 0:
-                params.append(module._parameters['weight'].view(-1))
-                params.append(module._parameters['bias'].view(-1))
+        def _iter_child(parent_module):
+            for i, module in enumerate(parent_module.children()):
+                # if has sub modules
+                if(len(module._modules) > 0):
+                    _iter_child(module)
+                elif len(module._parameters) > 0:
+                    for key,param in module._parameters.items():
+                        if(type(param) != type(None)):
+                            params.append(param.view(-1))
+        _iter_child(self.model)           
+        
         return torch.cat(params)
 
     def set_flat_params(self, flat_params):
         # Restore original shapes
-        offset = 0
-        for i, module in enumerate(self.model.children()):
-            if type(module) == torch.nn.modules.container.Sequential:
-                seq_module = module
-                for i, module in enumerate(seq_module):
-                    if(len(module._parameters) > 0):
-                        weight_shape = module._parameters['weight'].size()
-                        bias_shape = module._parameters['bias'].size()
-
-                        weight_flat_size = reduce(mul, weight_shape, 1)
-                        bias_flat_size = reduce(mul, bias_shape, 1)
-
-                        module._parameters['weight'] = flat_params[
-                            offset:offset + weight_flat_size].view(*weight_shape)
-                        module._parameters['bias'] = flat_params[
-                            offset + weight_flat_size:offset + weight_flat_size + bias_flat_size].view(*bias_shape)
-
-                        offset += weight_flat_size + bias_flat_size
-            elif(len(module._parameters) > 0):
-                weight_shape = module._parameters['weight'].size()
-                bias_shape = module._parameters['bias'].size()
-
-                weight_flat_size = reduce(mul, weight_shape, 1)
-                bias_flat_size = reduce(mul, bias_shape, 1)
-
-                module._parameters['weight'] = flat_params[
-                    offset:offset + weight_flat_size].view(*weight_shape)
-                module._parameters['bias'] = flat_params[
-                    offset + weight_flat_size:offset + weight_flat_size + bias_flat_size].view(*bias_shape)
-
-                offset += weight_flat_size + bias_flat_size
-
+        self.offset = 0
+        def _iter_child(parent_module):
+            for i, module in enumerate(parent_module.children()):
+                # if has sub modules
+                if(len(module._modules) > 0):
+                    _iter_child(module)
+                elif len(module._parameters) > 0:
+                    for key,param in module._parameters.items():
+                        if(type(param) != type(None)):
+                            flat_size = reduce(mul, param.size(), 1)
+                            module._parameters[key] = flat_params[self.offset:self.offset + flat_size].view(param.size())
+                            self.offset += flat_size
+        _iter_child(self.model)           
+        
     def copy_params_from(self, model):
         for modelA, modelB in zip(self.model.parameters(), model.parameters()):
             modelA.data.copy_(modelB.data)
@@ -129,6 +122,7 @@ class MetaHelper(nn.Module):
         self.meta_model = model
         self.backup_model = backup_model
         self.backup_loss = None
+        self.backup_step_count = 0
     def reset(self, model):
         self.meta_model.detach()
         self.meta_model.model.zero_grad()
@@ -144,20 +138,22 @@ class MetaHelper(nn.Module):
         self.meta_model.set_flat_params(new_flat_params)
         return self.meta_model.model
     def check_backup_and_reset(self,model,loss):
-        # if first backup or loss is better than best loss, update backup to this 
-        if(type(self.backup_loss) == type(None) or loss < self.backup_loss):
+        # if first backup or loss is better than best loss or have not refresh backup for too long, update backup to this 
+        if(type(self.backup_loss) == type(None) or loss < self.backup_loss or (self.backup_step_count > 100 and loss < 4*self.backup_loss)):
             self.reset(model)
             self.update(self.backup_model)
             self.backup_loss = loss
-            #print('resetting backup')
+            self.backup_step_count = 0
+            print('resetting backup')
         # else if loss is much worse than backup loss, restore
-        elif(loss > 2*self.backup_loss):
+        elif(loss > 4*self.backup_loss and loss > 2):
             print('restoring backup')
             self.reset(self.backup_model)
             self.update(model)
         # else the loss is still okay, just reset model
         else:
             self.reset(model)
+        self.backup_step_count += 1
 
 
 #'''
@@ -179,7 +175,16 @@ class Net(nn.Module):
         x = self.fc3(x)
         return x
 #'''
-#Net = lambda: VGG('VGG16')
+if args.use_darts_arch:
+    CIFAR_CLASSES = 10
+    genotype = eval("genotypes.%s" % args.arch)
+    Net = lambda: Network(args.init_channels, CIFAR_CLASSES, args.layers, args.auxiliary, genotype)
+else:
+    Net = lambda: VGG('VGG11')
+    print('Network ','VGG11')
+    #Net = MobileNetV2
+    #print('Network ','MobileNetV2')
+    pass
 def eval(model):
     correct = 0
     total = 0
@@ -187,13 +192,17 @@ def eval(model):
         for data in testloader:
             images, labels = data
             images, labels = images.to(device), labels.to(device)
-            outputs = model(images)
+            if args.use_darts_arch and args.auxiliary:
+                outputs, _ = model(images)
+            else:
+                outputs = model(images)
+                if type(outputs) == type(()):
+                    outputs = outputs[0]
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
     print('Accuracy of the network on the 10000 test images: %d %%' % (
         100 * correct / total))
-
 
 #net_params = list(net.parameters())
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -227,31 +236,47 @@ for iteration in range(args.iteration):
         running_new_loss = 0.0
         loss_sum = 0.0
         #update_step_idx = 0
+        model.drop_path_prob = args.drop_path_prob * epoch / float(args.epoch)
+        meta_helper.meta_model.model.drop_path_prob = args.drop_path_prob * epoch / float(args.epoch)
         for i, data in enumerate(trainloader, 0):
+            #if(i > 15):
+            #    break
             # get the inputs
             inputs, labels = data
-            #pdb.set_trace()
             inputs, labels = inputs.to(device), labels.to(device)
             # zero the parameter gradients
             model.zero_grad()
-
             # forward + backward + optimize
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
+            if args.use_darts_arch and args.auxiliary:
+                outputs, logits_aux = model(inputs)
+                loss = criterion(outputs, labels) + criterion(logits_aux, labels)
+            else:
+                outputs = model(inputs)
+                if type(outputs) == type(()):
+                    outputs = outputs[0]
+                loss = criterion(outputs, labels)
             loss.backward()
             grad_norm = nn.utils.clip_grad_norm_(model.parameters(), args.model_grad_norm)
             if any(param.grad.min().item() > 1e30 for param in model.parameters()):
-                print('nan gradient encountered')
-                pdb.set_trace()
+                print('nan gradient encountered in model params, restoring beta')
+                meta_helper.check_backup_and_reset(model, 1e12)
+                meta_optim.restore_backup()
+                model.zero_grad()
+                #pdb.set_trace()
             params_updates = meta_optim.step()
             model.zero_grad()
             meta_model = meta_helper.meta_update(model, params_updates)
-            
-            outputs = meta_model(inputs)
-            new_loss = criterion(outputs, labels)
+            if args.use_darts_arch and args.auxiliary:
+                outputs, logits_aux = meta_model(inputs)
+                new_loss = criterion(outputs, labels) + criterion(logits_aux, labels)
+            else:
+                outputs = meta_model(inputs)
+                if type(outputs) == type(()):
+                    outputs = outputs[0]
+                new_loss = criterion(outputs, labels)
             if(math.isnan(new_loss.item())):
                 print('nan new loss')
-                pdb.set_trace()
+                #pdb.set_trace()
             new_loss_delta = new_loss - sum(prev_new_loss)/len(prev_new_loss)
             loss_sum += new_loss_delta
             ## update if loss gets smaller
@@ -271,10 +296,11 @@ for iteration in range(args.iteration):
                    beta.grad /= args.bptt_step
                 meta_optim.lr.grad /= args.bptt_step
                 if(any(torch.isnan(beta.grad).max() for beta in meta_optim.beta) or math.isnan(meta_optim.lr.grad.item())): 
-                    print('beta/lr nan')
+                    print('beta/lr gra nan, skip this update')
                     optimizer.zero_grad()
 
                 grad_norm = nn.utils.clip_grad_norm_(meta_optim.beta, args.beta_grad_norm)
+                meta_optim.set_backup()
                 optimizer.step()
                 # randomly change beta if loss gets worse
                 #if loss_sum.item() > prev_loss_sum:
@@ -284,7 +310,7 @@ for iteration in range(args.iteration):
                     bptt_loss_sum = 1e12
                 meta_helper.check_backup_and_reset(model, bptt_loss_sum)
                 if(any(torch.isnan(beta).max() for beta in meta_optim.beta) or math.isnan(meta_optim.lr.item())): 
-                    print('beta/lr nan')
+                    print('beta/lr nan, should not happen!')
                     pdb.set_trace()
                 #meta_helper.reset(model)
                 loss_sum, bptt_loss_sum = 0.0, 0.0
@@ -303,7 +329,7 @@ for iteration in range(args.iteration):
             eval(model)
             if args.save_path != '':
                 torch.save(model, args.save_path+'/model_iter'+str(iteration))
-                torch.save(model, args.save_path+'/meta_optim_iter'+str(iteration))
+                torch.save(meta_optim, args.save_path+'/meta_optim_iter'+str(iteration))
                 print('Saving to {}'.format(args.save_path))
     old_beta = meta_optim.beta
     print('Finished Training')
@@ -348,8 +374,11 @@ meta_optim = MetaOptimizer(second_model.parameters(), beta=old_beta)
 #meta_helper = MetaHelper(MetaModel(Net().to(device)))
 meta_helper.reset(second_model)
 #update_step_idx = 0
+
 for epoch in range(args.epoch):
     running_loss = 0.0
+    second_model.drop_path_prob = args.drop_path_prob * epoch / float(args.epoch)
+    meta_helper.meta_model.model.drop_path_prob = args.drop_path_prob * epoch / float(args.epoch)
     for i, data in enumerate(trainloader, 0):
         inputs, labels = data
         inputs, labels = inputs.to(device), labels.to(device)
@@ -357,8 +386,14 @@ for epoch in range(args.epoch):
         second_model.zero_grad()
 
         # forward + backward + optimize
-        outputs = second_model(inputs)
-        loss = criterion(outputs, labels)
+        if args.use_darts_arch and args.auxiliary:
+            outputs, logits_aux = second_model(inputs)
+            loss = criterion(outputs, labels) + criterion(logits_aux, labels)
+        else:
+            outputs = second_model(inputs)
+            if type(outputs) == type(()):
+                outputs = outputs[0]
+            loss = criterion(outputs, labels)
         loss.backward()
         grad_norm = nn.utils.clip_grad_norm_(second_model.parameters(), args.model_grad_norm)
 
