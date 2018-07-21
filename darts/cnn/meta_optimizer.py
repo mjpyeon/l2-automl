@@ -26,15 +26,19 @@ class MetaOptimizer(optim.Optimizer):
 		self.lr = Variable(torch.Tensor([lr]).cuda(), requires_grad=True)
 		self.sf = nn.Softmax(-1)
 		self.eps = 1e-8
+		self.backup_loss = 1e12
 		super(MetaOptimizer, self).__init__(params, defaults)
 
-	def set_backup(self):
-		self.backup_beta_data = [self.beta[i].data.clone() for i in range(len(self.beta))]
-		self.lr_backup = self.lr.data.clone()
+	def set_backup(self, loss):
+		if loss < self.backup_loss:
+			self.backup_loss = loss
+			self.backup_beta_data = [self.beta[i].data.clone() for i in range(len(self.beta))]
+			self.lr_backup = self.lr.data.clone()
 	def restore_backup(self):
 		for beta, backup_beta in zip(self.beta, self.backup_beta_data):
 			beta.data.copy_(backup_beta)
 		self.lr.data.copy_(self.lr_backup)
+		self.backup_loss *= 2
 
 	def hard_operand(self, idx, ops):
 		return ops[idx]
