@@ -17,15 +17,16 @@ from collections import deque
 import copy
 import argparse
 import math
-from model import NetworkCIFAR as Network
+from model_search import Network
+from architect2 import Architect
 from mobile_net import MobileNetV2
 import genotypes
 import pdb
 torch.backends.cudnn.deterministic = True
 torch.manual_seed(977)
 parser = argparse.ArgumentParser("cifar")
-parser.add_argument('--arch_weight_decay', type=float, default=0.1, help='weight decay for optim arch encoding')
-parser.add_argument('--arch_learning_rate', type=float, default=0.002, help='learning rate for arch encoding')
+parser.add_argument('--beta_weight_decay', type=float, default=0.1, help='weight decay for optim arch encoding')
+parser.add_argument('--beta_learning_rate', type=float, default=0.002, help='learning rate for arch encoding')
 parser.add_argument('--learning_rate', type=float, default=1e-3, help='init learning rate')
 parser.add_argument('--batch_size', type=int, default=4, help='batch_size for training')
 parser.add_argument('--model_grad_norm', type=float, default=1.0, help='max grad norm for model')
@@ -38,11 +39,17 @@ parser.add_argument('--epoch', type=int, default=3, help='num of epoch for each 
 parser.add_argument('--test_freq', type=int, default=10, help='frequency in epoch for running testing while training')
 parser.add_argument('--save_path', type=str, default='', help='folder path to save trained model & meta optim')
 parser.add_argument('--arch', type=str, default='DARTS', help='which architecture to use')
-parser.add_argument('--init_channels', type=int, default=36, help='num of init channels')
-parser.add_argument('--layers', type=int, default=20, help='total number of layers')
+parser.add_argument('--init_channels', type=int, default=16, help='num of init channels')
 parser.add_argument('--auxiliary', action='store_true', default=False, help='use auxiliary tower')
 parser.add_argument('--drop_path_prob', type=float, default=0.2, help='drop path probability')
 parser.add_argument('--use_darts_arch', action='store_true', default=False, help='use darts architecture')
+parser.add_argument('--layers', type=int, default=4, help='total number of layers')
+parser.add_argument('--unrolled', action='store_true', default=False, help='use one-step unrolled validation loss')
+parser.add_argument('--arch_training', action='store_true', default=False, help='arch alpha training mode')
+parser.add_argument('--weight_decay', type=float, default=3e-4, help='weight decay')
+parser.add_argument('--alpha_weight_decay', type=float, default=1e-3, help='weight decay for arch encoding')
+parser.add_argument('--alpha_learning_rate', type=float, default=3e-4, help='learning rate for arch encoding')
+parser.add_argument('--train_portion', type=float, default=0.5, help='portion of training data')
 args = parser.parse_args()
 print(args)
 transform = transforms.Compose(
@@ -51,9 +58,23 @@ transform = transforms.Compose(
 
 trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
                                         download=True, transform=transform)
+indices = list(range(len(trainset)))
+split = int(np.floor(args.train_portion * len(trainset)))
+'''
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size,
                                           shuffle=False, num_workers=1)
+'''
 
+trainloader = torch.utils.data.DataLoader(
+      trainset, batch_size=args.batch_size,
+      sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[:split]),
+      pin_memory=True, num_workers=1)
+
+validloader = torch.utils.data.DataLoader(
+      trainset, batch_size=args.batch_size,
+      sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[split:len(trainset)]),
+      pin_memory=True, num_workers=1)
+#'''
 testset = torchvision.datasets.CIFAR10(root='./data', train=False,
                                        download=True, transform=transform)
 testloader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size,
@@ -185,13 +206,13 @@ class Net(nn.Module):
 if args.use_darts_arch:
     CIFAR_CLASSES = 10
     genotype = eval("genotypes.%s" % args.arch)
-    Net = lambda: Network(args.init_channels, CIFAR_CLASSES, args.layers, args.auxiliary, genotype)
+    Net = lambda: Network(args.init_channels, CIFAR_CLASSES, args.layers, criterion)
     print('Network DARTS')
 else:
     #Net = lambda: VGG('VGG11')
     #print('Network ','VGG11')
-    Net = MobileNetV2
-    print('Network ','MobileNetV2')
+    #Net = MobileNetV2
+    #print('Network ','MobileNetV2')
     pass
 def eval(model):
     correct = 0
@@ -227,15 +248,18 @@ old_beta = None
 meta_helper = MetaHelper(MetaModel(Net().to(device)), Net().to(device))
 for iteration in range(args.iteration):
     model = Net().to(device)
+    if args.use_darts_arch:
+        architect = Architect(model, args)
     if type(old_beta) == type(None):
         meta_optim = MetaOptimizer(model.parameters(), lr=args.learning_rate)
     else:
         meta_optim = MetaOptimizer(model.parameters(), lr=args.learning_rate, beta=old_beta)
-    optimizer = optim.Adam(meta_optim.beta+[meta_optim.lr], lr=args.arch_learning_rate, weight_decay=args.arch_weight_decay)
+    optimizer = optim.Adam(meta_optim.beta+[meta_optim.lr], lr=args.beta_learning_rate, weight_decay=args.beta_weight_decay)
     meta_helper.reset(model)
     #new_params = [p.clone() for p in net_params]
     #pdb.set_trace()
     beta_code = [np.argmax(beta.data.cpu().numpy(), axis=0) for beta in meta_optim.beta]
+    #pdb.set_trace()
     print('Greedy beta code: {}'.format(beta_code))
     prev_new_loss = deque(maxlen=100)
     prev_new_loss.append(2.2)
@@ -254,20 +278,25 @@ for iteration in range(args.iteration):
                 # get the inputs
                 inputs, labels = data
                 inputs, labels = inputs.to(device), labels.to(device)
+                inputs_valid_real, labels_valid_real = next(iter(validloader))
+                inputs_valid_real, labels_valid_real = inputs_valid_real.to(device), labels_valid_real.to(device)
+                inputs_valid, labels_valid = inputs_valid_real, labels_valid_real#inputs, labels
                 # zero the parameter gradients
                 model.zero_grad()
                 # forward + backward + optimize
                 if args.use_darts_arch and args.auxiliary:
                     outputs, logits_aux = model(inputs)
                     loss = criterion(outputs, labels) + criterion(logits_aux, labels)
+                    del outputs, logits_aux
                 else:
                     outputs = model(inputs)
                     if type(outputs) == type(()):
                         outputs = outputs[0]
                     loss = criterion(outputs, labels)
+                    del outputs
                 loss.backward()
                 grad_norm = nn.utils.clip_grad_norm_(model.parameters(), args.model_grad_norm)
-                if any(param.grad.min().item() > 1e30 for param in model.parameters()):
+                if any(type(param.grad) != type(None) and param.grad.min().item() > 1e30 for param in model.parameters()):
                     print('nan gradient encountered in model params, restoring beta')
                     meta_helper.check_backup_and_reset(model, 1e12)
                     meta_optim.restore_backup()
@@ -275,17 +304,20 @@ for iteration in range(args.iteration):
                     #pdb.set_trace()
 
                 params_updates = meta_optim.step()
+                running_loss += loss.item()
+                bptt_loss_sum += loss.item()
+                del loss
                 #params_updates = [p.clamp(-0.1,0.1) for p in params_updates]
                 model.zero_grad()
                 meta_model = meta_helper.meta_update(model, params_updates)
                 if args.use_darts_arch and args.auxiliary:
-                    outputs, logits_aux = meta_model(inputs)
-                    new_loss = criterion(outputs, labels) + criterion(logits_aux, labels)
+                    outputs, logits_aux = meta_model(inputs_valid)
+                    new_loss = criterion(outputs, labels_valid) + criterion(logits_aux, labels_valid)
                 else:
-                    outputs = meta_model(inputs)
+                    outputs = meta_model(inputs_valid)
                     if type(outputs) == type(()):
                         outputs = outputs[0]
-                    new_loss = criterion(outputs, labels)
+                    new_loss = criterion(outputs, labels_valid)
                 if(math.isnan(new_loss.item())):
                     print('nan new loss')
                     #pdb.set_trace()
@@ -295,11 +327,10 @@ for iteration in range(args.iteration):
                 meta_helper.update(model)
 
                 # print statistics
-                running_loss += loss.item()
-                bptt_loss_sum += loss.item()
                 if not math.isnan(new_loss.item()):
                     prev_new_loss.append(new_loss.item())
                 running_new_loss += new_loss.item()
+                del new_loss
                 if((i+1) % args.bptt_step == 0):
                     optimizer.zero_grad()
                     loss_sum.backward()
@@ -308,7 +339,7 @@ for iteration in range(args.iteration):
                        beta.grad /= args.bptt_step
                     meta_optim.lr.grad /= args.bptt_step
                     if(any(torch.isnan(beta.grad).max() for beta in meta_optim.beta) or math.isnan(meta_optim.lr.grad.item())): 
-                        print('beta/lr gra nan, skip this update')
+                        print('beta/lr grad nan, skip this update')
                         meta_helper.check_backup_and_reset(model, 1e12)
                         meta_optim.restore_backup()
                         optimizer.zero_grad()
@@ -320,7 +351,7 @@ for iteration in range(args.iteration):
                     #if loss_sum.item() > prev_loss_sum:
                     #    for beta, num_ in zip(meta_optim.beta, meta_optim.num_ops):
                     #        beta.data = 8e-3*torch.randn(num_).cuda()
-                    if (math.isnan(new_loss.item())):
+                    if (math.isnan(loss_sum.item())):
                         bptt_loss_sum = np.inf
                     meta_helper.check_backup_and_reset(model, bptt_loss_sum)
                     #meta_helper.reset(model)
@@ -329,13 +360,16 @@ for iteration in range(args.iteration):
                         pdb.set_trace()
                     #meta_helper.reset(model)
                     loss_sum, bptt_loss_sum = 0.0, 0.0
+                    if args.use_darts_arch and args.arch_training:
+                        #pdb.set_trace()
+                        arch_grad_norm = architect.step(inputs, labels, inputs_valid_real, labels_valid_real, meta_optim.lr.data.item(), meta_optim, unrolled=args.unrolled)
                 if (i+1) % args.log_freq == 0:    # print every 2000 mini-batches
                     print('[%d, %5d] loss: %.3f, new loss: %.3f' %
                           (epoch + 1, i + 1, running_loss / args.log_freq, running_new_loss/args.log_freq))
                     running_loss = 0.0
                     running_new_loss = 0.0
                 if (i) % args.log_freq == 0:
-                    print('beta[0] abs mean: {}'.format(meta_optim.beta[0].abs().mean()))
+                    print('beta[0] abs mean: {}, alpha[0] mean: {}'.format(meta_optim.beta[0].abs().mean(), model.alphas_normal.abs().mean()))
 
             beta_code = [np.argmax(beta.data.cpu().numpy(), axis=0) for beta in meta_optim.beta]
             print('Greedy beta code: {}'.format(beta_code))

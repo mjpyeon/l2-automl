@@ -145,25 +145,25 @@ def train(train_queue, search_queue, model, architect, criterion, optimizer, lr)
     target = Variable(target, requires_grad=False).cuda(async=True)
 
     # get a random minibatch from the search queue with replacement
-    input_search, target_search = next(iter(search_queue))
-    input_search = Variable(input_search, requires_grad=False).cuda()
-    target_search = Variable(target_search, requires_grad=False).cuda(async=True)
-
+    #input_search, target_search = next(iter(search_queue))
+    #input_search = Variable(input_search, requires_grad=False).cuda()
+    #target_search = Variable(target_search, requires_grad=False).cuda(async=True)
+    input_search, target_search = input, target
     arch_grad_norm = architect.step(input, target, input_search, target_search, lr, optimizer, unrolled=args.unrolled)
     grad.update(arch_grad_norm)
 
-    optimizer.zero_grad()
+    optimizer.zero_grad() 
     logits = model(input)
     loss = criterion(logits, target)
 
     loss.backward()
-    nn.utils.clip_grad_norm(model.parameters(), args.grad_clip)
+    nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
     optimizer.step()
 
     prec1, prec5 = utils.accuracy(logits, target, topk=(1, 5))
-    objs.update(loss.data[0], n)
-    top1.update(prec1.data[0], n)
-    top5.update(prec5.data[0], n)
+    objs.update(loss.item(), n)
+    top1.update(prec1.item(), n)
+    top5.update(prec5.item(), n)
 
     if step % args.report_freq == 0:
       logging.info('train %03d %e %f %f', step, objs.avg, top1.avg, top5.avg)
@@ -172,29 +172,29 @@ def train(train_queue, search_queue, model, architect, criterion, optimizer, lr)
 
 
 def infer(valid_queue, model, criterion):
-  objs = utils.AvgrageMeter()
-  top1 = utils.AvgrageMeter()
-  top5 = utils.AvgrageMeter()
-  model.eval()
+  with torch.no_grad():
+    objs = utils.AvgrageMeter()
+    top1 = utils.AvgrageMeter()
+    top5 = utils.AvgrageMeter()
+    model.eval()
 
-  for step, (input, target) in enumerate(valid_queue):
-    input = Variable(input, volatile=True).cuda()
-    target = Variable(target, volatile=True).cuda(async=True)
+    for step, (input, target) in enumerate(valid_queue):
+      input = Variable(input).cuda()
+      target = Variable(target).cuda(async=True)
 
-    logits = model(input)
-    loss = criterion(logits, target)
+      logits = model(input)
+      loss = criterion(logits, target)
 
-    prec1, prec5 = utils.accuracy(logits, target, topk=(1, 5))
-    n = input.size(0)
-    objs.update(loss.data[0], n)
-    top1.update(prec1.data[0], n)
-    top5.update(prec5.data[0], n)
+      prec1, prec5 = utils.accuracy(logits, target, topk=(1, 5))
+      n = input.size(0)
+      objs.update(loss.data[0], n)
+      top1.update(prec1.data[0], n)
+      top5.update(prec5.data[0], n)
 
-    if step % args.report_freq == 0:
-      logging.info('valid %03d %e %f %f', step, objs.avg, top1.avg, top5.avg)
+      if step % args.report_freq == 0:
+        logging.info('valid %03d %e %f %f', step, objs.avg, top1.avg, top5.avg)
 
-  return top1.avg, objs.avg
-
+    return top1.avg, objs.avg
 
 if __name__ == '__main__':
   main() 

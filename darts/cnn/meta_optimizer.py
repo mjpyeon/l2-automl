@@ -109,7 +109,7 @@ class MetaOptimizer(optim.Optimizer):
 		g4 = self.graph(ops, 15)
 		return g4
 
-	def step(self, DoUpdate=False, closure=None):
+	def step(self, DoUpdate=False, closure=None, virtual=False):
 		loss = None
 		if closure is not None:
 			loss = closure()
@@ -137,10 +137,11 @@ class MetaOptimizer(optim.Optimizer):
 				# update operands
 				grad2 = grad * grad
 				grad3 = grad2 * grad
-				state['m'].mul_(self.m_decay).add_(1 - self.m_decay, grad)
-				state['m_py'].mul_(self.m_decay).add_(1, grad)
-				state['v'].mul_(self.vr_decay).add_(1 - self.vr_decay, grad2)
-				state['r'].mul_(self.vr_decay).add_(1 - self.vr_decay, grad3)
+				if not virtual:
+					state['m'].mul_(self.m_decay).add_(1 - self.m_decay, grad)
+					state['m_py'].mul_(self.m_decay).add_(1, grad)
+					state['v'].mul_(self.vr_decay).add_(1 - self.vr_decay, grad2)
+					state['r'].mul_(self.vr_decay).add_(1 - self.vr_decay, grad3)
 
 				ops = [
 						grad,
