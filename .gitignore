@@ -6,3 +6,9 @@ learning-to-learn/cifar10
 enas/outputs*
 enas/data
 darts/data
+
+darts/cnn/data
+
+*.swp
+*.pyc
+*.gz

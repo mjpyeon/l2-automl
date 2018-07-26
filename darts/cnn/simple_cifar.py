@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+from functools import reduce
+
 
 import torch
 import torchvision
@@ -15,43 +16,17 @@ from dpn import DPN92
 from operator import mul
 from collections import deque
 import copy
-import argparse
 import math
 from model_search import Network
 from architect2 import Architect
 from mobile_net import MobileNetV2
 import genotypes
 import pdb
+
+from args import args
+
 torch.backends.cudnn.deterministic = True
 torch.manual_seed(977)
-parser = argparse.ArgumentParser("cifar")
-parser.add_argument('--beta_weight_decay', type=float, default=0.1, help='weight decay for optim arch encoding')
-parser.add_argument('--beta_learning_rate', type=float, default=0.002, help='learning rate for arch encoding')
-parser.add_argument('--learning_rate', type=float, default=1e-3, help='init learning rate')
-parser.add_argument('--batch_size', type=int, default=4, help='batch_size for training')
-parser.add_argument('--model_grad_norm', type=float, default=1.0, help='max grad norm for model')
-parser.add_argument('--beta_grad_norm', type=float, default=1.0, help='max grad norm for beta')
-parser.add_argument('--log_freq', type=int, default=50, help='logging frequency')
-parser.add_argument('--bptt_step', type=int, default=1, help='steps for bptt')
-#parser.add_argument('--update_step', type=int, default=1, help='steps for update')
-parser.add_argument('--iteration', type=int, default=3, help='training iterations')
-parser.add_argument('--epoch', type=int, default=3, help='num of epoch for each training iteration and testing')
-parser.add_argument('--test_freq', type=int, default=10, help='frequency in epoch for running testing while training')
-parser.add_argument('--save_path', type=str, default='', help='folder path to save trained model & meta optim')
-parser.add_argument('--arch', type=str, default='DARTS', help='which architecture to use')
-parser.add_argument('--init_channels', type=int, default=16, help='num of init channels')
-parser.add_argument('--auxiliary', action='store_true', default=False, help='use auxiliary tower')
-parser.add_argument('--drop_path_prob', type=float, default=0.2, help='drop path probability')
-parser.add_argument('--use_darts_arch', action='store_true', default=False, help='use darts architecture')
-parser.add_argument('--layers', type=int, default=4, help='total number of layers')
-parser.add_argument('--unrolled', action='store_true', default=False, help='use one-step unrolled validation loss')
-parser.add_argument('--arch_training', action='store_true', default=False, help='arch alpha training mode')
-parser.add_argument('--weight_decay', type=float, default=3e-4, help='weight decay')
-parser.add_argument('--alpha_weight_decay', type=float, default=1e-3, help='weight decay for arch encoding')
-parser.add_argument('--alpha_learning_rate', type=float, default=3e-4, help='learning rate for arch encoding')
-parser.add_argument('--train_portion', type=float, default=0.5, help='portion of training data')
-args = parser.parse_args()
-print(args)
 transform = transforms.Compose(
     [transforms.ToTensor(),
      transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
