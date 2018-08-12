@@ -1,12 +1,16 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-from torch.autograd import Variable
 import math
 import numpy as np
-import pdb
-torch.manual_seed(977)
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.autograd import Variable
+
+from args import args
+
+torch.manual_seed(args.seed)
+torch.cuda.set_device(args.gpu)
+
 class MetaOptimizer(optim.Optimizer):
 	def __init__(self, params, lr=2e-3, beta=None):
 		defaults = dict()
@@ -14,13 +18,9 @@ class MetaOptimizer(optim.Optimizer):
 		self.vr_decay = 0.999
 		self.num_ops = [16,16,4,4,5] + [17,17,4,4,5] + [18,18,4,4,5] + [19,19,4,4,5]
 		self.beta_scaling = 100
-		print('Beta scaling: {}, Meta opt graph: {}'.format(self.beta_scaling, self.num_ops))
-		self.beta = [Variable(8e-3*torch.randn(num_).cuda(), requires_grad=True) for num_ in self.num_ops]
-		#self.backup_beta_data = [self.beta[i].data.clone() for i in range(len(self.beta))]
+		self.beta = [Variable(8e-3 * torch.randn(num_).cuda(), requires_grad = True) for num_ in self.num_ops]
 		self.loss_check = 1e8
-		#self.beta[0].data = torch.Tensor([0.5,0.5]).cuda()
-		#self.beta[1].data = torch.Tensor([1,-1e8,-1e8,-1e8]).cuda()
-		if type(beta) != type(None):
+		if beta != None:
 			for b, b_given in zip(self.beta, beta):
 				b.data.copy_(b_given.data)
 		self.lr = Variable(torch.Tensor([lr]).cuda(), requires_grad=True)
@@ -28,36 +28,52 @@ class MetaOptimizer(optim.Optimizer):
 		self.eps = 1e-8
 		self.backup_loss = 1e12
 		super(MetaOptimizer, self).__init__(params, defaults)
+		self.print_config()
+
+	def print_config(self):
+		print('Beta scaling: {}, Meta opt graph: {}'.format(self.beta_scaling, self.num_ops))
+		self.print_beta_code()
+
+	# TODO (Hailin): The following might be less useful.
+	'''
+	def print_beta_code(self):
+		code = [np.argmax(beta.data.cpu().numpy(), axis=0) for beta in self.beta]
+		print('Greedy beta code: {}'.format(code))
 
 	def set_backup(self, loss):
 		if loss < self.backup_loss:
 			self.backup_loss = loss
 			self.backup_beta_data = [self.beta[i].data.clone() for i in range(len(self.beta))]
 			self.lr_backup = self.lr.data.clone()
+
 	def restore_backup(self):
 		for beta, backup_beta in zip(self.beta, self.backup_beta_data):
 			beta.data.copy_(backup_beta)
 		self.lr.data.copy_(self.lr_backup)
 		self.backup_loss *= 2
+	'''
 
 	def hard_operand(self, idx, ops):
 		return ops[idx]
+
 	def hard_unary(self, idx, input):
 		unary_funcs = {
-			0:lambda x:x,
-			1:lambda x:-x,
-			2:lambda x:torch.sqrt(torch.abs(x) + self.eps),
-			3:lambda x:torch.sign(x)
+			0: lambda x: x,
+			1: lambda x: -x,
+			2: lambda x: torch.sqrt(torch.abs(x) + self.eps),
+			3: lambda x: torch.sign(x)
 		}
 		return unary_funcs[idx](input)
+
 	def hard_binary(self, idx, left, right):
 		binary_funcs = {
-			0:lambda x,y:x+y,
-			1:lambda x,y:x-y,
-			2:lambda x,y:x*y,
-			3:lambda x,y:x/(y+self.eps)
+			0: lambda x,y: x + y,
+			1: lambda x,y: x - y,
+			2: lambda x,y: x * y,
+			3: lambda x,y: x / (y + self.eps)
 		}
 		return binary_funcs[idx](left, right)
+
 	def hard_graph(self, ops, code):
 		op1 = self.hard_operand(code[0], ops) # [1, dim]
 		op2 = self.hard_operand(code[1], ops) # [1, dim]
@@ -70,14 +86,13 @@ class MetaOptimizer(optim.Optimizer):
 		return (b * a.transpose(0, len(a.size())-1)).transpose(len(a.size())-1,0)
 
 	def operand(self, beta, ops):
-		beta_ = self.sf(beta*self.beta_scaling)
+		beta_ = self.sf(beta * self.beta_scaling)
 		return self.ele_mul(beta_, ops).sum(0)
 
 	def unary(self, beta, input):
 		input = input.unsqueeze(0)
-		beta_ = self.sf(beta*self.beta_scaling)
-		unary_funcs = torch.cat((input, -input, torch.sqrt(torch.abs(input) + 1e-12), torch.sign(input)), 0)#,
-								#torch.log(torch.abs(input)), torch.exp(input.clamp(max=5))),0)
+		beta_ = self.sf(beta * self.beta_scaling)
+		unary_funcs = torch.cat((input, -input, torch.sqrt(torch.abs(input) + 1e-12), torch.sign(input)), 0)
 		return self.ele_mul(beta_, unary_funcs).sum(0)
 
 	def binary(self, beta, left, right):
@@ -89,8 +104,6 @@ class MetaOptimizer(optim.Optimizer):
 		return self.ele_mul(beta_, binary_funcs).sum(0)
 
 	def graph(self, ops, start=0):
-		#pdb.set_trace()
-		#ops = torch.autograd.Variable(ops, requires_grad=False) # [num_ops, dim]
 		op1 = self.operand(self.beta[start+0], ops) # [1, dim]
 		op2 = self.operand(self.beta[start+1], ops) # [1, dim]
 		u1 = self.unary(self.beta[start+2], op1) # [1, dim]
@@ -241,9 +254,4 @@ if __name__ == '__main__':
 		params_updates = meta_optim.step(DoUpdate=(i % 1 == 0))
 		if(i % 50 == 0):
 			print('i: {}, loss: {}'.format(i, loss.item()))
-
-	#'''
-
-
-
 
