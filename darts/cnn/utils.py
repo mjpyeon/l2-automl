@@ -7,7 +7,6 @@ from torch.autograd import Variable
 
 
 class AvgrageMeter(object):
-
   def __init__(self):
     self.reset()
 
