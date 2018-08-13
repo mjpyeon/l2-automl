@@ -69,6 +69,8 @@ class Trainer:
 				torch.manual_seed(args.seed + episode)
 				self.train_epoch_(epoch, lr, optimizee, meta_optim, optimizer, architect)
 				meta_optim.print_beta_greedy()
+				print('Finished Training')
+				print('beta[0] abs mean: {}'.format(meta_optim.beta[0].abs().mean()))
 				if (epoch+1) % args.test_freq == 0:
 					print('Run Testing')
 					acc = self.eval(optimizee.model)
@@ -83,8 +85,6 @@ class Trainer:
 						self.save_checkpoint(optimizee, meta_optim, epoch, checkpoint_path)
 						print('Saving to {}'.format(args.save_dir))
 				old_beta = meta_optim.beta
-				print('Finished Training')
-				print('beta[0] abs mean: {}'.format(meta_optim.beta[0].abs().mean()))
 
 	def eval(self, model):
 		correct, total = 0, 0
@@ -149,7 +149,7 @@ class Trainer:
 						beta.grad /= args.bptt_step
 					meta_optim.lr_scaling.grad /= args.bptt_step
 				meta_optim.beta_entropy(args.beta_entropy_penalty)
-				beta_grad_norms = nn.utils.clip_grad_norm_(meta_optim.beta, args.beta_grad_norm)
+				beta_grad_norms = nn.utils.clip_grad_norm_(meta_optim.beta + [meta_optim.lr_scaling], args.beta_grad_norm)
 				# update beta
 				optimizer.step()
 				# detach parameters 

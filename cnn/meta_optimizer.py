@@ -12,7 +12,7 @@ class MetaOptimizer(optim.Optimizer):
 		defaults = dict(lr=lr)
 		self.m_decay = 0.9
 		self.vr_decay = 0.999
-		self.num_ops = [16,16,6,6,5] + [17,17,6,6,5] #+ [18,18,6,6,5] + [19,19,6,6,5]
+		self.num_ops = [16,16,6,6,5] + [17,17,6,6,5] + [18,18,6,6,5] + [19,19,6,6,5]
 		self.min_beta_scaling = 100
 		self.beta_scaling = 100
 		self.logged_message = set()
@@ -136,7 +136,7 @@ class MetaOptimizer(optim.Optimizer):
 
 	def print_beta_greedy(self):
 		with torch.no_grad():
-			num_subgraph = 2
+			num_subgraph = len(self.num_ops) / 5
 			beta_ = []
 			for graph_idx in range(num_subgraph):
 				start = graph_idx * 5
@@ -206,15 +206,14 @@ class MetaOptimizer(optim.Optimizer):
 		g1 = self.graph(ops, 0)
 		ops = torch.cat([ops,g1.unsqueeze(0)])
 		g2 = self.graph(ops, 5)
-		'''
 		ops = torch.cat([ops,g2.unsqueeze(0)])
 		g3 = self.graph(ops, 10)
 		ops = torch.cat([ops,g3.unsqueeze(0)])
 		g4 = self.graph(ops, 15)
-		'''
+		
 		#if(math.isnan(g4.abs().mean().item())):
 		#	pdb.set_trace()
-		return g2
+		return g4
 
 	def step(self, DoUpdate=False, closure=None, virtual=False):
 		loss = None
