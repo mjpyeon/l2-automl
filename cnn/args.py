@@ -15,7 +15,6 @@ parser.add_argument('--alpha_weight_decay', type=float, default=1e-3, help='weig
 parser.add_argument('--alpha_learning_rate', type=float, default=3e-4, help='learning rate for arch encoding')
 parser.add_argument('--arch', type=str, default='simple', help='which architecture to use')
 
-# add by L2-ml
 # args for training in general
 parser.add_argument('--epoch', type=int, default=3, help='num of epoch for each training iteration and testing')
 parser.add_argument('--test_freq', type=int, default=10, help='frequency in epoch for running testing while training')
@@ -28,7 +27,6 @@ parser.add_argument('--max_episodes', type=int, default=3, help='max episodes of
 parser.add_argument('--learning_rate_min', type=float, default=0.001, help='min learning rate')
 parser.add_argument('--learning_rate', type=float, default=1e-3, help='init learning rate')
 parser.add_argument('--batch_size', type=int, default=4, help='batch_size for training')
-
 
 # args for meta optimizer
 parser.add_argument('--beta_entropy_penalty', type=float, default=0.1, help='ratio of entropy loss / normal loss')
@@ -45,8 +43,6 @@ parser.add_argument('--save_beta_path', type=str, default='', help='saved beta v
 parser.add_argument('--checkpoint_path', type=str, default='', help='folder path to load saved model & meta optim')
 parser.add_argument('--fixed_beta', action='store_true', default=False, help='use fixed beta, no training on beta')
 parser.add_argument('--train_big_model', action='store_true', default=False, help='used saved alpha/beta on training larger model')
-
-
 args = parser.parse_args()
 
 def print_args():
