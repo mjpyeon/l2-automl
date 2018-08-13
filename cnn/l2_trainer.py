@@ -153,8 +153,8 @@ class Trainer:
 						beta.grad /= args.bptt_step
 					meta_optim.lr_scaling.grad /= args.bptt_step
 				meta_optim.beta_entropy(args.beta_entropy_penalty)
+
 				beta_grad_norms = nn.utils.clip_grad_norm_(meta_optim.beta, args.beta_grad_norm)
-				#pdb.set_trace()
 				# update beta
 				optimizer.step()
 				# detach parameters 
