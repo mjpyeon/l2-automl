@@ -24,29 +24,15 @@ class Cifar10:
         split = int(np.floor(args.train_portion * len(indices)))
         self.train_loader = torch.utils.data.DataLoader(
               self.train_set, batch_size=args.batch_size,
-              sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[:split]),
-              pin_memory=True, num_workers=1)
+              #sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[:split]),
+              shuffle=True,
+              pin_memory=True, num_workers=0)
         self.val_loader = torch.utils.data.DataLoader(
               self.train_set, batch_size=args.batch_size,
-              sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[split:len(self.train_set)]),
-              pin_memory=True, num_workers=1)
+              #sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[split:len(self.train_set)]),
+              shuffle=True,
+              pin_memory=True, num_workers=0)
         self.test_loader = torch.utils.data.DataLoader(
               self.test_set, batch_size=args.batch_size, shuffle=False,
-              pin_memory=True, num_workers=2)
+              pin_memory=True, num_workers=0)
     
-    def eval(self, model):
-        correct, total = 0, 0
-        with torch.no_grad():
-            for image, labels in self.test_loader:
-                if args.use_darts_arch and args.auxiliary:
-                    outputs, _ = model(images)
-                else:
-                    outputs = model(images)
-                    if type(outputs) == type(()):
-                        outputs = outputs[0]
-                _, predicted = torch.max(outputs.data, 1)
-                total += labels.size(0)
-                correct += (predicted == labels).sum().item()
-        print('Accuracy of the network on the 10000 test images: %d %%' % (
-            100 * correct / total))
-        return float(correct) / total

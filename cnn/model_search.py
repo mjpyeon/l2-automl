@@ -5,7 +5,7 @@ from operations import *
 from torch.autograd import Variable
 from genotypes import PRIMITIVES
 from genotypes import Genotype
-
+from network import Network
 
 class MixedOp(nn.Module):
 
@@ -58,7 +58,7 @@ class Cell(nn.Module):
     return torch.cat(states[-self._multiplier:], dim=1)
 
 
-class Network(nn.Module):
+class Darts_Network(Network):
 
   def __init__(self, C, num_classes, layers, criterion, steps=4, multiplier=4, stem_multiplier=3):
     super(Network, self).__init__()
@@ -120,6 +120,23 @@ class Network(nn.Module):
       self.alphas_normal,
       self.alphas_reduce,
     ]
+
+  def state_dict(self):
+    state_dict = super(Network, self).state_dict()
+    state_dict['arch_parameters'] = self.arch_parameters()
+    return state_dict
+
+  def load_state_dict(self, state_dict):
+    if('arch_parameters' in state_dict):
+      self.set_arch_paramters(state_dict['arch_parameters'])
+      state_dict.pop('arch_parameters')
+    else:
+      print('NOTE: no arch parameters in model state dict !!')  
+    super(Network, self).load_state_dict(state_dict)
+
+  def set_arch_paramters(self, arch_parameters):
+    self.alphas_normal.data.copy_(arch_parameters[0].data)
+    self.alphas_reduce.data.copy_(arch_parameters[1].data)
 
   def arch_parameters(self):
     return self._arch_parameters

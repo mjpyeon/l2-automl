@@ -16,6 +16,17 @@ class Optimizee:
 	    self.model = model 
 	    self.symbolic_model = copy.deepcopy(model)
 	
+	def sync_symbolic_model(self):
+		"""
+		sync symbolic model with model
+		"""
+		self.symbolic_model = copy.deepcopy(self.model)
+		'''
+		self.symbolic_model.copy_params_from(self.model)
+		if(sync_alpha):
+			self.symbolic_model.set_arch_paramters(self.model.arch_parameters)
+		'''
+
 	def update(self, updates):
 		"""
 		non-differentiable update
@@ -37,6 +48,7 @@ class Optimizee:
 		self.symbolic_model.detach()
 		#for param in self.symbolic_model.parameters():
 		#    param = param.detach()
+
 
 
 #def test():
