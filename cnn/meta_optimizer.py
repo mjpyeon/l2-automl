@@ -16,9 +16,9 @@ class MetaOptimizer(optim.Optimizer):
 		self.min_beta_scaling = 100
 		self.beta_scaling = 100
 		self.logged_message = set()
-		print('Beta scaling: {}, Meta opt graph: {}'.format(self.beta_scaling, self.num_ops))
+		self.log_once('Beta scaling: {}, Meta opt graph: {}'.format(self.beta_scaling, self.num_ops))
 		self.cons = Variable(torch.Tensor([8e-3]).cuda(), requires_grad=False)
-		print('fixing beta 0 dim, 0.')
+		self.log_once('fixing beta 0 dim, 8e-3')
 		#self.beta = [Variable(8e-3*torch.randn(num_).cuda(), requires_grad=True) for num_ in self.num_ops]
 		self.init_beta()
 		#for b in self.beta:
@@ -27,7 +27,7 @@ class MetaOptimizer(optim.Optimizer):
 		if type(beta) != type(None):
 			self.set_beta(beta)
 		self.lr_scaling = Variable(torch.Tensor([8e-3]).cuda(), requires_grad=True)
-		print('using self.lr_scaling')
+		self.log_once('using self.lr_scaling')
 		self.sf = nn.Softmax(-1)
 		self.eps = 1e-8
 		self.backup_loss = 1e12
@@ -58,8 +58,8 @@ class MetaOptimizer(optim.Optimizer):
 		state_dict['lr_scaling'] = self.lr_scaling
 		return state_dict
 
-	def load_state_dict(self, state_dict):
-		if('state' in state_dict):
+	def load_state_dict(self, state_dict, NoStates=False):
+		if('state' in state_dict and NoStates is True):
 			super(MetaOptimizer, self).load_state_dict(state_dict)
 		for beta, beta_save in zip(self.beta, state_dict['beta']):
 			beta.data.copy_(beta_save.data)
@@ -136,7 +136,7 @@ class MetaOptimizer(optim.Optimizer):
 
 	def print_beta_greedy(self):
 		with torch.no_grad():
-			num_subgraph = 2
+			num_subgraph = len(self.num_ops) / 5
 			beta_ = []
 			for graph_idx in range(num_subgraph):
 				start = graph_idx * 5
@@ -206,7 +206,6 @@ class MetaOptimizer(optim.Optimizer):
 		g1 = self.graph(ops, 0)
 		ops = torch.cat([ops,g1.unsqueeze(0)])
 		g2 = self.graph(ops, 5)
-		
 		ops = torch.cat([ops,g2.unsqueeze(0)])
 		g3 = self.graph(ops, 10)
 		ops = torch.cat([ops,g3.unsqueeze(0)])
