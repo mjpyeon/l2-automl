@@ -18,17 +18,15 @@ from optimizee import Optimizee
 from cifar10_dataset import Cifar10
 from args import args
 
+np.random.seed(args.seed)
 
 class Trainer:
 	def __init__(self):
 		torch.backends.cudnn.deterministic = True
-		np.random.seed(args.seed)
 		self.device = torch.device("cuda:%d" % (args.gpu) if torch.cuda.is_available() else "cpu")
 		torch.cuda.set_device(args.gpu)
-
 		self.dataset = Cifar10()
 		self.criterion = nn.CrossEntropyLoss()
-
 		if args.use_darts_arch:
 			genotype = eval("genotypes.%s" % args.arch)
 			self.Net = lambda: Darts_Network(args.init_channels, self.dataset.num_classes, args.layers, self.criterion)
@@ -41,7 +39,6 @@ class Trainer:
 			self.Net = Simple_Net
 		else:
 			raise Exception('Net not defined!')
-
 		self.logged_message = set()
 
 	def train(self):
@@ -114,6 +111,7 @@ class Trainer:
 			x_train, y_train = data[0].to(self.device), data[1].to(self.device)
 			val_data = next(iter(self.dataset.val_loader))
 			x_val, y_val = val_data[0].to(self.device), val_data[1].to(self.device)
+
 			# Derive \frac{\partial L}{\partial \theta}
 			optimizee.model.zero_grad()
 			loss = self.model_forward(optimizee.model, x_train, y_train)
@@ -131,13 +129,11 @@ class Trainer:
 			next_step_loss = self.model_forward(optimizee.symbolic_model, x_train, y_train)
 			if(math.isnan(next_step_loss.item())):
 				raise Exception('next_step_loss is nan')
-			
 			next_step_losses += next_step_loss.item()
 			losses += loss.item()
-			
 			meta_update_losses += next_step_loss
 
-			self.log_once('udpate if(new_loss.data < loss.data):')
+			self.log_once('udpate only if next_step_loss < loss')
 			# do a non-differentiable step of update over optimizee.model if next_step_loss is smaller
 			if(next_step_loss.data < loss.data):
 				optimizee.update(param_updates)
@@ -154,7 +150,6 @@ class Trainer:
 					meta_optim.lr_scaling.grad /= args.bptt_step
 				meta_optim.beta_entropy(args.beta_entropy_penalty)
 				beta_grad_norms = nn.utils.clip_grad_norm_(meta_optim.beta, args.beta_grad_norm)
-				#pdb.set_trace()
 				# update beta
 				optimizer.step()
 				# detach parameters 
@@ -226,13 +221,11 @@ class Trainer:
 		if args.use_darts_arch and args.auxiliary:
 			outputs, logits_aux = model(inputs)
 			loss = self.criterion(outputs, labels) + self.criterion(logits_aux, labels)
-			del outputs, logits_aux
 		else:
 			outputs = model(inputs)
 			if type(outputs) == type(()):
 				outputs = outputs[0]
 			loss = self.criterion(outputs, labels)
-			del outputs
 		return loss
 
 if __name__ == '__main__':
