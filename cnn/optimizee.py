@@ -46,6 +46,9 @@ class Optimizee:
 		i.e. this will be called every T steps 
 		"""
 		self.symbolic_model.detach()
+		#for param in self.symbolic_model.parameters():
+		#    param = param.detach()
+
 
 
 #def test():

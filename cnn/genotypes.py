@@ -71,28 +71,5 @@ AmoebaNet = Genotype(
   reduce_concat = [3, 4, 6]
 )
 
-DARTS = Genotype(
-  normal=[
-    ('sep_conv_3x3', 1),
-	('sep_conv_3x3', 0),
-	('skip_connect', 0),
-	('sep_conv_3x3', 1),
-	('skip_connect', 0),
-	('sep_conv_3x3', 1),
-	('sep_conv_3x3', 0),
-	('skip_connect', 2)
-  ], 
-  normal_concat = [2, 3, 4, 5],
-  reduce = [
-    ('max_pool_3x3', 0), 
-	('max_pool_3x3', 1), 
-	('skip_connect', 2), 
-	('max_pool_3x3', 0), 
-	('max_pool_3x3', 0), 
-	('skip_connect', 2), 
-	('skip_connect', 2), 
-	('avg_pool_3x3', 0)
-  ], 
-  reduce_concat=[2, 3, 4, 5]
-)
+DARTS = Genotype(normal=[('sep_conv_3x3', 1), ('sep_conv_3x3', 0), ('skip_connect', 0), ('sep_conv_3x3', 1), ('skip_connect', 0), ('sep_conv_3x3', 1), ('sep_conv_3x3', 0), ('skip_connect', 2)], normal_concat=[2, 3, 4, 5], reduce=[('max_pool_3x3', 0), ('max_pool_3x3', 1), ('skip_connect', 2), ('max_pool_3x3', 0), ('max_pool_3x3', 0), ('skip_connect', 2), ('skip_connect', 2), ('avg_pool_3x3', 0)], reduce_concat=[2, 3, 4, 5])
 

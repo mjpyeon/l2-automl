@@ -17,6 +17,7 @@ class Cifar10:
         self.classes = ('plane', 'car', 'bird', 'cat','deer', 'dog', 'frog', 
             'horse', 'ship', 'truck')
         self.num_classes = len(self.classes)
+        self.num_train_batch = (len(self.train_set) - 1) / args.batch_size + 1
         self._build_loaders()
 
     def _build_loaders(self):

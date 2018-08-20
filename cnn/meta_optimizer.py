@@ -6,48 +6,41 @@ from torch.autograd import Variable
 import math
 import numpy as np
 import pdb
+from Logger import logger
 #torch.manual_seed(977)
 class MetaOptimizer(optim.Optimizer):
-	def __init__(self, params, lr=2e-3, beta=None):
+	def __init__(self, params, lr=2e-3, state_dict=None):
 		defaults = dict(lr=lr)
 		self.m_decay = 0.9
 		self.vr_decay = 0.999
-		self.num_ops = [16,16,6,6,5] + [17,17,6,6,5] + [18,18,6,6,5] + [19,19,6,6,5]
+		self.num_ops = [14,14,6,6,5] + [15,15,6,6,5] + [16,16,6,6,5] + [17,17,6,6,5]
 		self.min_beta_scaling = 100
 		self.beta_scaling = 100
 		self.logged_message = set()
-		self.log_once('Beta scaling: {}, Meta opt graph: {}'.format(self.beta_scaling, self.num_ops))
+		logger.log_once('Beta scaling: {}, Meta opt graph: {}'.format(self.beta_scaling, self.num_ops))
 		self.cons = Variable(torch.Tensor([8e-3]).cuda(), requires_grad=False)
-		self.log_once('fixing beta 0 dim, 8e-3')
+		logger.log_once('fixing beta 0 dim, 8e-3')
 		#self.beta = [Variable(8e-3*torch.randn(num_).cuda(), requires_grad=True) for num_ in self.num_ops]
 		self.init_beta()
 		#for b in self.beta:
 		#	b[0].data.copy_(torch.Tensor([8e-3]).squeeze())
 		self.loss_check = 1e8
-		if type(beta) != type(None):
-			self.set_beta(beta)
 		self.lr_scaling = Variable(torch.Tensor([8e-3]).cuda(), requires_grad=True)
-		self.log_once('using self.lr_scaling')
+		if type(state_dict) != type(None):
+			self.load_state_dict(state_dict)
+		logger.log_once('using self.lr_scaling')
 		self.sf = nn.Softmax(-1)
+		self.tanh = nn.Tanh()
 		self.eps = 1e-8
 		self.backup_loss = 1e12
 		super(MetaOptimizer, self).__init__(params, defaults)
 
-	def log_once(self, message):
-		mhash = hash(message)
-		if mhash in self.logged_message:
-			return
-		else:
-			print(message)
-			self.logged_message.add(mhash)
-
 	def init_beta(self):
 		self.beta = [Variable(8e-3*torch.randn(num_-1).cuda(), requires_grad=True) for num_ in self.num_ops]
-		#self.log_once('self.beta = [Variable(8e-3*torch.randn(num_).cuda(), requires_grad=True) for num_ in self.num_ops]')
+		#logger.log_once('self.beta = [Variable(8e-3*torch.randn(num_).cuda(), requires_grad=True) for num_ in self.num_ops]')
 
-	def set_beta(self, given_beta):
-		for b, b_ in zip(self.beta, given_beta):
-			b.data.copy_(b_.data)
+	def training_params(self):
+		return self.beta + [self.lr_scaling]
 
 	def state_dict(self, NoStates=False):
 		if NoStates:
@@ -59,11 +52,12 @@ class MetaOptimizer(optim.Optimizer):
 		return state_dict
 
 	def load_state_dict(self, state_dict, NoStates=False):
-		if('state' in state_dict and NoStates is True):
+		if('state' in state_dict and NoStates != True):
 			super(MetaOptimizer, self).load_state_dict(state_dict)
 		for beta, beta_save in zip(self.beta, state_dict['beta']):
 			beta.data.copy_(beta_save.data)
 		self.lr_scaling.data.copy_(state_dict['lr_scaling'].data)
+		self.print_beta_greedy()
 
 	def beta_decay(self, decay_rate):
 		for beta in self.beta:
@@ -95,7 +89,7 @@ class MetaOptimizer(optim.Optimizer):
 			loss += (beta_ * beta_.log()).sum()
 			entropy_loss = (beta_ * beta_.log()).sum()
 			beta_grad = torch.autograd.grad(entropy_loss, self.beta[i])[0]
-			beta_grad_ratio = (self.beta[i].grad.abs().mean().item() / beta_grad.abs().mean().item()) * loss_ratio
+			beta_grad_ratio = (self.beta[i].grad.abs().mean().item() / (beta_grad.abs().mean().item()) + 1e-12) * loss_ratio
 			self.beta[i].grad += beta_grad_ratio * beta_grad
 
 	def hard_operand(self, idx, ops):
@@ -141,8 +135,8 @@ class MetaOptimizer(optim.Optimizer):
 			for graph_idx in range(num_subgraph):
 				start = graph_idx * 5
 				ops_mask, binary_mask = 0, 0
-				if(graph_idx > 0 and torch.max(self.beta[start+0],0)[1] < 15):
-					ops_mask = 16
+				if(graph_idx > 0 and torch.max(self.beta[start+0],0)[1] < 13):
+					ops_mask = 14
 					binary_mask = 5
 				op1_beta = self.transform_beta(self.beta[start+0]).data.cpu().numpy()
 				op2_beta = self.transform_beta(self.beta[start+1], ops_mask).data.cpu().numpy()
@@ -152,7 +146,7 @@ class MetaOptimizer(optim.Optimizer):
 				beta_ += [op1_beta, op2_beta, u1_beta, u2_beta, b1_beta]
 			'''
 			for i, beta in enumerate(self.beta):
-				if(i % 5 == 1 and i > 1 and torch.max(self.beta[i-1],0)[1] < 15):
+				if(i % 5 == 1 and i > 1 and torch.max(self.beta[i-1],0)[1] < 13):
 					maskIdx = 16
 				else:
 					maskIdx = 0
@@ -162,7 +156,7 @@ class MetaOptimizer(optim.Optimizer):
 		beta_code = [np.argmax(b, axis=0) for b in beta_]
 		beta_prob = [b[idx] for b,idx in zip(beta_, beta_code)]
 		beta_prob = [np.prod(beta_prob[5*graph_idx:5*(graph_idx+1)]) for graph_idx in range(num_subgraph)]
-		print('Greedy beta code: {}, subgraph prod: {}'.format(beta_code, beta_prob))
+		logger.log('Greedy beta code: {}, subgraph prod: {}'.format(beta_code, beta_prob))
 
 	def operand(self, beta, ops, maskIdx=0):
 		beta_ = self.transform_beta(beta, maskIdx)
@@ -179,7 +173,7 @@ class MetaOptimizer(optim.Optimizer):
 		beta_ = self.transform_beta(beta, maskIdx, 4)
 		left = left.unsqueeze(0)
 		right = right.unsqueeze(0)
-		binary_funcs = torch.cat((left+right,left-right, left*right,left/(right + self.eps), left),0)#, 
+		binary_funcs = torch.cat((left+right,left-right, left*right,(left/(right + self.eps)).clamp(min=-2, max=2), left),0)#, 
 									#torch.abs(left).pow(right.clamp(max=5))), 0)
 		return self.ele_mul(beta_, binary_funcs).sum(0)
 
@@ -188,16 +182,16 @@ class MetaOptimizer(optim.Optimizer):
 		#ops = torch.autograd.Variable(ops, requires_grad=False) # [num_ops, dim]
 		ops_mask = 0
 		binary_mask = 0
-		self.log_once('if(start > 1 and torch.max(self.beta[start+0],0)[1] < 15): ops_mask = 16')
-		if(start > 1 and torch.max(self.beta[start+0],0)[1] < 15):
-			ops_mask = 16
+		logger.log_once('if(start > 1 and torch.max(self.beta[start+0],0)[1] < 13): ops_mask = 14')
+		if(start > 1 and torch.max(self.beta[start+0],0)[1] < 13):
+			ops_mask = 14
 			binary_mask = 5
 		op1 = self.operand(self.beta[start+0], ops) # [1, dim]
 		op2 = self.operand(self.beta[start+1], ops, ops_mask) # [1, dim]
 		u1 = self.unary(self.beta[start+2], op1) # [1, dim]
 		u2 = self.unary(self.beta[start+3], op2) # [1, dim]
 		b1 = self.binary(self.beta[start+4], u1, u2, binary_mask)
-		if(math.isnan(b1.abs().mean().item())):
+		if(math.isnan(b1.abs().mean().item()) or b1.abs().max().item() > 1e4):
 			pdb.set_trace()
 		return b1
 
@@ -257,7 +251,7 @@ class MetaOptimizer(optim.Optimizer):
 						state['m_py'],
 						state['v'],
 						state['r'],
-						torch.sign(grad),
+						#torch.sign(grad),
 						torch.sign(state['m']),
 						state['constant1'],
 						state['constant2'],
@@ -265,7 +259,7 @@ class MetaOptimizer(optim.Optimizer):
 						1e-4*p.data,
 						1e-3*p.data,
 						1e-2*p.data,
-						1e-1*p.data
+						#1e-1*p.data
 					]
 				ops = [op.unsqueeze(0) for op in ops]
 				update = self.hierarchical_graph(torch.cat(ops, 0))#.clamp(min=-2, max=2)
