@@ -1,13 +1,6 @@
 #cifar10/*/*
-learning-to-learn/mnist
-learning-to-learn/MNIST-data
-learning-to-learn/cifar
-learning-to-learn/cifar10
-enas/outputs*
-enas/data
-darts/data
-
-darts/cnn/data
+cnn/checkpoints
+cnn/data
 
 *.swp
 *.pyc
