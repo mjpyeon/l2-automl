@@ -1,6 +1,7 @@
 import logging
 import os
 import pathlib
+import pdb
 
 LOG_LEVEL_DICT = {
     "logging.debug": logging.DEBUG,
@@ -41,7 +42,9 @@ def create_logger(logger_name, log_file_path, log_level=DEFAULT_LOG_LEVEL, log_f
 	Then, in /var/log/foo.log, you would find
 	[2018-06-26 15:24:41,037:foo.py#L3:WARNING]: This is a warning message.
 	"""
-	pathlib.Path(log_file_path).parents[0].mkdir(exist_ok=True)
+	# for python 2 compatibility
+	if(not pathlib.Path(log_file_path).parents[0].exists()):
+		pathlib.Path(log_file_path).parents[0].mkdir()
 	logger = logging.getLogger(logger_name)
 	logger.setLevel(log_level)
 	fh = logging.FileHandler(log_file_path)

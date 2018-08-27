@@ -10,7 +10,7 @@ import torch.nn.functional as F
 
 from auto_optimizer import AutoOptimizer
 from args import args
-
+import logger as L
 
 def _concat(xs):
   return torch.cat([x.view(-1) for x in xs])
@@ -24,7 +24,9 @@ In Optimizee class, we keep two copies of the optimizee model:
 """
 class Optimizee:
 	def __init__(self, Net):
-		self.model = Net().cuda()
+		self.Net = Net
+		self.logger = L.get_logger(args.logdir)
+		self.model = self.Net().cuda()
 		if args.arch == 'auto' and args.arch_training:
 			self.alpha_optimizer = torch.optim.Adam(self.model.arch_parameters(),
 							lr=args.alpha_learning_rate, betas=(0.5, 0.999), weight_decay=args.alpha_weight_decay)
@@ -33,8 +35,9 @@ class Optimizee:
 		self.optimizer = AutoOptimizer(self.model.parameters(), lr = args.learning_rate)
 		self.beta_optimizer = torch.optim.Adam(self.optimizer.optim_parameters() + [self.optimizer.lr_scaling], lr = args.beta_learning_rate)
 
-	def sync_symbolic_model(self):
-		self.symbolic_model.copy_params_from(self.model)
+	def sync_symbolic_model(self, skipWeights=False):
+		if skipWeights == False:
+			self.symbolic_model.copy_params_from(self.model)
 		if args.arch == 'auto':
 			self.symbolic_model.set_arch_paramters(self.model.arch_parameters)
 
@@ -196,12 +199,12 @@ class Optimizee:
 
 	def reset_model_parameters(self):
 
-		model = Net().cuda()
+		model = self.Net().cuda()
 		self.model.copy_params_from(model)
 		self.sync_symbolic_model()
 
 	def reset_arch_parameters(self):
-		print(optimzee.model.get_type())
+		self.logger.info(self.model.get_type())
 		#if optimizee.model.get_type() is 'AutoNetwork':
 		params = self.model.gen_alphas()
 		self.model.set_arch_paramters(params)
@@ -213,7 +216,8 @@ class Optimizee:
 	def state_dict(self):
 		state_dict = {}
 		state_dict['model'] = self.model.state_dict()
-		state_dict['alpha_optimizer'] = self.alpha_optimizer.state_dict()
+		if args.arch == 'auto' and args.arch_training:
+			state_dict['alpha_optimizer'] = self.alpha_optimizer.state_dict()
 		state_dict['beta_optimizer'] = self.beta_optimizer.state_dict()
 		state_dict['optimizer'] = self.optimizer.state_dict()
 		return state_dict
@@ -221,7 +225,8 @@ class Optimizee:
 	def load_state_dict(self, state_dict):
 		self.model.load_state_dict(state_dict['model'])
 		self.symbolic_model = copy.deepcopy(self.model)
-		self.alpha_optimizer.load_state_dict(state_dict['alpha_optimizer'])
+		if args.arch == 'auto' and args.arch_training:
+			self.alpha_optimizer.load_state_dict(state_dict['alpha_optimizer'])
 		self.beta_optimizer.load_state_dict(state_dict['beta_optimizer'])
 		self.optimizer.load_state_dict(state_dict['optimizer'])
 		

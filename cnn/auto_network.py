@@ -6,6 +6,7 @@ from torch.autograd import Variable
 from genotypes import PRIMITIVES, Genotype
 from network import Network
 from operations import *
+import logger as L
 
 class MixedOp(nn.Module):
 	def __init__(self, C, stride):
@@ -58,6 +59,7 @@ class Cell(nn.Module):
 class AutoNetwork(Network):
 	def __init__(self, C, num_classes, layers, criterion, steps=4, multiplier=4, stem_multiplier=3):
 		super(Network, self).__init__(num_classes, criterion)
+		self.logger = L.get_logger(args.logdir)
 		self._C = C
 		self._layers = layers
 		self._steps = steps
@@ -123,7 +125,7 @@ class AutoNetwork(Network):
 			self.set_arch_paramters(state_dict['arch_parameters'])
 			state_dict.pop('arch_parameters')
 		else:
-			print('NOTE: no arch parameters in model state dict !!')  
+			self.logger.info('NOTE: no arch parameters in model state dict !!')  
 		super(Network, self).load_state_dict(state_dict)
 	
 	def set_arch_paramters(self, arch_parameters):

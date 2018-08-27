@@ -55,7 +55,7 @@ class AutoOptimizer(optim.Optimizer):
 		return state_dict
 
 	def load_state_dict(self, state_dict, NoStates=False):
-		if('state' in state_dict and NoStates is True):
+		if('state' in state_dict and NoStates is False):
 			super(AutoOptimizer, self).load_state_dict(state_dict)
 		for beta, beta_save in zip(self.beta, state_dict['beta']):
 			beta.data.copy_(beta_save.data)
@@ -161,7 +161,7 @@ class AutoOptimizer(optim.Optimizer):
 		beta_code = [np.argmax(b, axis=0) for b in beta_]
 		beta_prob = [b[idx] for b,idx in zip(beta_, beta_code)]
 		beta_prob = [np.prod(beta_prob[5*graph_idx:5*(graph_idx+1)]) for graph_idx in range(num_subgraph)]
-		print('Greedy beta code: {}, subgraph prod: {}'.format(beta_code, beta_prob))
+		self.logger.info('Greedy beta code: {}, subgraph prod: {}'.format(beta_code, beta_prob))
 
 	def operand(self, beta, ops, maskIdx=0):
 		beta_ = self.transform_beta(beta, maskIdx)
@@ -193,8 +193,8 @@ class AutoOptimizer(optim.Optimizer):
 		u1 = self.unary(self.beta[start+2], op1) # [1, dim]
 		u2 = self.unary(self.beta[start+3], op2) # [1, dim]
 		b1 = self.binary(self.beta[start+4], u1, u2, binary_mask)
-		if(math.isnan(b1.abs().mean().item())):
-			pdb.set_trace()
+		#if(math.isnan(b1.abs().mean().item())):
+		#	pdb.set_trace()
 		return b1
 
 	def hierarchical_graph(self, ops):

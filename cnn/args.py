@@ -17,6 +17,7 @@ parser.add_argument('--update_alpha_step', type=int, default=2, help='how many s
 
 # args for training in general
 parser.add_argument('--max_epoch', type=int, default=3, help='num of epoch for each training iteration and testing')
+parser.add_argument('--max_test_epoch', type=int, default=20, help='num of epoch for testing trained beta')
 parser.add_argument('--test_freq', type=int, default=10, help='frequency in epoch for running testing while training')
 parser.add_argument('--logdir', type=str, default='exp', help='folder path to save trained model & meta optim')
 parser.add_argument('--log_freq', type=int, default=50, help='logging frequency')
