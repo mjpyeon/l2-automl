@@ -53,6 +53,7 @@ class SimpleNetwork(Network):
         x = self.fc3(x)
         return x
 
+
 class VGG(Network):
     cfg = {
         'VGG11': [64, 'M', 128, 'M', 256, 256, 'M', 512, 512, 'M', 512, 512, 'M'],
@@ -86,6 +87,7 @@ class VGG(Network):
         out = self.classifier(out)
         return out
 
+
 class Block(nn.Module):
     '''expand + depthwise + pointwise'''
     def __init__(self, in_planes, out_planes, expansion, stride):
@@ -112,6 +114,7 @@ class Block(nn.Module):
         out = self.bn3(self.conv3(out))
         out = out + self.shortcut(x) if self.stride==1 else out
         return out
+
 
 class MobileNetV2(Network):
     # (expansion, out_planes, num_blocks, stride)

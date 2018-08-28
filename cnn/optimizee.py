@@ -35,8 +35,8 @@ class Optimizee:
 		self.optimizer = AutoOptimizer(self.model.parameters(), lr = args.learning_rate)
 		self.beta_optimizer = torch.optim.Adam(self.optimizer.optim_parameters() + [self.optimizer.lr_scaling], lr = args.beta_learning_rate)
 
-	def sync_symbolic_model(self, skipWeights=False):
-		if skipWeights == False:
+	def sync_symbolic_model(self, skip_weights=False):
+		if skip_weights == False:
 			self.symbolic_model.copy_params_from(self.model)
 		if args.arch == 'auto':
 			self.symbolic_model.set_arch_paramters(self.model.arch_parameters)
@@ -198,7 +198,6 @@ class Optimizee:
 		return [(x-y).div_(2*R) for x, y in zip(grads_p, grads_n)]
 
 	def reset_model_parameters(self):
-
 		model = self.Net().cuda()
 		self.model.copy_params_from(model)
 		self.sync_symbolic_model()

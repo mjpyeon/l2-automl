@@ -45,8 +45,8 @@ class AutoOptimizer(optim.Optimizer):
 	def optim_parameters(self):
 		return self.beta
 
-	def state_dict(self, NoStates=False):
-		if NoStates:
+	def state_dict(self, no_state = False):
+		if no_state:
 			state_dict = {}	
 		else:
 			state_dict = super(AutoOptimizer, self).state_dict()
@@ -54,8 +54,8 @@ class AutoOptimizer(optim.Optimizer):
 		state_dict['lr_scaling'] = self.lr_scaling
 		return state_dict
 
-	def load_state_dict(self, state_dict, NoStates=False):
-		if('state' in state_dict and NoStates is False):
+	def load_state_dict(self, state_dict, no_state = False):
+		if('state' in state_dict and no_state is False):
 			super(AutoOptimizer, self).load_state_dict(state_dict)
 		for beta, beta_save in zip(self.beta, state_dict['beta']):
 			beta.data.copy_(beta_save.data)
@@ -208,7 +208,7 @@ class AutoOptimizer(optim.Optimizer):
 		g4 = self.graph(ops, 15)
 		return g4
 
-	def step(self, DoUpdate=False, closure=None, virtual=False):
+	def step(self, do_update=False, closure=None, virtual=False):
 		loss = None
 		if closure is not None:
 			loss = closure()
@@ -263,7 +263,7 @@ class AutoOptimizer(optim.Optimizer):
 				ops = [op.unsqueeze(0) for op in ops]
 				update = self.hierarchical_graph(torch.cat(ops, 0))#.clamp(min=-2, max=2)
 				#update = self.hard_graph(torch.cat(ops, 0), [7, 2, 0, 2, 2])
-				if DoUpdate:
+				if do_update:
 					p.data.add_(-torch.exp(self.lr_scaling).item() * group['lr'], update.data)	
 				params_updates += [-torch.exp(self.lr_scaling) * group['lr'] * update]
 		return params_updates
