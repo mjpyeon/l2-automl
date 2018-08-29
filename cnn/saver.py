@@ -1,10 +1,11 @@
 import os
 import datetime
 import numpy as np
-
+import torch
 from tensorboardX import SummaryWriter
 import logger as L
 from args import args
+import pdb
 
 class Saver:
 	'''
@@ -39,6 +40,13 @@ class Saver:
 		optimizee.sync_symbolic_model()
 		self.logger.info("=> loaded checkpoint '{}' (epoch {})".format(filepath, checkpoint['epoch']))
 		return start_epoch, start_episode
+
+	def add_beta_grads(self, grads):
+		for i,g in enumerate(grads):
+			beta_name = 'beta_{}'.format(i)
+			if(beta_name not in self.beta_grads):
+				self.beta_grads[beta_name] = []
+			self.beta_grads[beta_name] += [g.data.cpu().numpy()]
 
 	def write_beta(self, beta):
 		for i,b in enumerate(beta):

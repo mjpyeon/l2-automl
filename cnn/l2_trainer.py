@@ -143,13 +143,17 @@ class Trainer:
 			next_step_losses += next_step_loss.item()
 			losses += loss.item()
 			meta_update_losses += next_step_loss
+			
 			# do a non-differentiable update over optimizee.model if next_step_loss is smaller
 			if (next_step_loss.item() < loss.item()): # This is still important for performance
 				optimizee.update(param_updates)
 
 			# forsee bptt_steps then update beta
 			if (i + 1) % args.bptt_step == 0:
-				optimizee.beta_step(meta_update_losses)
+				beta_grad_norms += optimizee.beta_step(meta_update_losses).item()
+				# let saver save the grads for beta
+				with torch.no_grad():
+					self.saver.add_beta_grads([b.grad.abs().mean() for b in optimizee.optimizer.beta])
 				meta_update_losses = 0
 				optimizee.sync_symbolic_model()
 
@@ -159,10 +163,11 @@ class Trainer:
 
 			if (i + 1) % args.log_freq == 0:    # print every 2000 mini-batches
 				beta_out = optimizee.optimizer.beta[-1].data.cpu().numpy()
-				alpha_out = optimizee.model.alphas_normal[-1].data.cpu().numpy() if args.arch_training else 'None'
-				self.logger.info('[%d, %5d] loss: %.3f/%.3f, next step loss: %.3f, beta[-1]: %s, alpha[-1]: %s' %
-					  (epoch + 1, i + 1, losses / args.log_freq, model_grad_norms / args.log_freq, next_step_losses/args.log_freq, beta_out, alpha_out))
-				losses, next_step_losses, model_grad_norms = 0., 0., 0.
+				alpha_out = optimizee.model.alphas_normal[-1].data.cpu().numpy() if args.arch_training else ''
+				self.logger.info('[%d, %5d] loss: %.3f/%.3f, next step loss: %.3f, beta[-1]/L2(g): %s/%s, alpha[-1]: %s' %
+					  (epoch + 1, i + 1, losses / args.log_freq, model_grad_norms / args.log_freq, next_step_losses/args.log_freq, beta_out, beta_grad_norms / args.log_freq, alpha_out))
+				losses, next_step_losses, model_grad_norms, beta_grad_norms = 0., 0., 0., 0.
+				self.saver.write_beta(optimizee.optimizer.beta)
 		return True
 
 	def _train_epoch_fix_beta(self, epoch, lr, optimizee):

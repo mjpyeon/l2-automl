@@ -102,6 +102,8 @@ class Optimizee:
 		self.beta_optimizer.step()
 		# then detach the params of symbolic_model from its past
 		self.detach()
+		# return beta grad norm
+		return beta_grad_norms
 
 	def alpha_step(self, x_train, y_train, x_val, y_val, eta):
 		'''
