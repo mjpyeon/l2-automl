@@ -3,81 +3,45 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class Network(nn.Module):
-	def __init__(self):
+	def __init__(self, num_classes, criterion = nn.CrossEntropyLoss()):
 		super(Network, self).__init__()
-		pass
+		self._num_classes = num_classes
+		self._criterion = criterion
 	
 	def _make_layers(self):
-		pass
-	
+		raise NotImplementedError
+
 	def forward(self, x):
 		raise NotImplementedError
-	
-	def update(self, updates):
-		"""
-		non-differentiable update
-		"""
-		for param, update in zip(self.parameters(), updates):
-			param.data.add_(update.data)
-	
-	def differentiable_update(self, updates):
-		"""
-		differentiable update, i.e. we assign a differentiable variable as the model parameters of a NN, which
-		is disallowed by PyTorch actually. The way we do this is to first create a new variable `updated_param` 
-		to store the updated result and then assign it to the model
 
-		There is no better way to reassign the parameter as a new variable than directly accessing _parameters
-		"""
-		self.count = 0
-		def _iter_child(module):
-			for child in module.children():
-				if len(child._parameters) > 0:
-					for key, param in child._parameters.items():
-						if param is not None:
-							updated_params = child._parameters[key] + updates[self.count]
-							child._parameters[key] = updated_params 
-							self.count += 1
-				elif len(child._modules) > 0:
-					_iter_child(child)
-		_iter_child(self)
-	
-	def detach(self):
-		"""
-		This detaches the model.parameters from the past path that generates it.
-		"""
-		def _iter_child(module):
-			for child in module.children():
-				if len(child._parameters) > 0:
-					for key, param in child._parameters.items():
-						if param is not None:
-							child._parameters[key] = param.detach()
-				elif len(child._modules) > 0:
-					_iter_child(child)
-		_iter_child(self)
+	def _loss(self, input, target):
+		return self._criterion(self(input), target) 
 
+	def forward_pass(self, input, target):
+		return self._loss(input, target)
+	
 	def copy_params_from(self, source):
-		"""
-		non-differentiable copy
-		"""
 		for dest, src in zip(self.parameters(), source.parameters()):
 			dest.data.copy_(src.data)
 	
 	def copy_params_to(self, target):
-		"""
-		non-differentiable copy
-		"""
 		for src, dest in zip(self.parameters(), target.parameters()):
 			dest.data.copy_(src.data)
 
-class Simple_Net(Network):
-    def __init__(self):
-        super(Simple_Net, self).__init__()
+	@classmethod
+	def type_str(cls):
+		return cls.__name__
+
+
+class SimpleNetwork(Network):
+    def __init__(self, num_classes = 10, criterion = nn.CrossEntropyLoss()):
+        super(SimpleNetwork, self).__init__(num_classes, criterion)
         self.conv1 = nn.Conv2d(3, 6, 5)
         self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(6, 16, 5)
         self.fc1 = nn.Linear(16 * 5 * 5, 120)
         self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
+        self.fc3 = nn.Linear(84, self._num_classes)
         self.history = {}
 
     def forward(self, x, Eval=False):
@@ -89,6 +53,7 @@ class Simple_Net(Network):
         x = self.fc3(x)
         return x
 
+
 class VGG(Network):
     cfg = {
         'VGG11': [64, 'M', 128, 'M', 256, 256, 'M', 512, 512, 'M', 512, 512, 'M'],
@@ -97,10 +62,10 @@ class VGG(Network):
         'VGG19': [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 256, 'M', 512, 512, 512, 512, 'M', 512, 512, 512, 512, 'M'],
         }
 
-    def __init__(self, vgg_name):
-        super(VGG, self).__init__()
+    def __init__(self, vgg_name, num_classes = 10, criterion = nn.CrossEntropyLoss()):
+        super(VGG, self).__init__(num_classes, criterion)
         self.features = self._make_layers(VGG.cfg[vgg_name])
-        self.classifier = nn.Linear(512, 10)
+        self.classifier = nn.Linear(512, self._num_classes)
 
     def _make_layers(self, cfg):
         layers = []
@@ -121,6 +86,7 @@ class VGG(Network):
         out = out.view(out.size(0), -1)
         out = self.classifier(out)
         return out
+
 
 class Block(nn.Module):
     '''expand + depthwise + pointwise'''
@@ -149,6 +115,7 @@ class Block(nn.Module):
         out = out + self.shortcut(x) if self.stride==1 else out
         return out
 
+
 class MobileNetV2(Network):
     # (expansion, out_planes, num_blocks, stride)
     cfg = [(1,  16, 1, 1),
@@ -159,15 +126,15 @@ class MobileNetV2(Network):
            (6, 160, 3, 2),
            (6, 320, 1, 1)]
 
-    def __init__(self, num_classes=10):
-        super(MobileNetV2, self).__init__()
+    def __init__(self, num_classes = 10, criterion = nn.CrossEntropyLoss()):
+        super(MobileNetV2, self).__init__(num_classes, criterion)
         # NOTE: change conv1 stride 2 -> 1 for CIFAR10
         self.conv1 = nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(32)
         self.layers = self._make_layers(in_planes=32)
         self.conv2 = nn.Conv2d(320, 1280, kernel_size=1, stride=1, padding=0, bias=False)
         self.bn2 = nn.BatchNorm2d(1280)
-        self.linear = nn.Linear(1280, num_classes)
+        self.linear = nn.Linear(1280, self._num_classes)
 
     def _make_layers(self, in_planes):
         layers = []
@@ -187,23 +154,3 @@ class MobileNetV2(Network):
         out = out.view(out.size(0), -1)
         out = self.linear(out)
         return out
-
-def test_mobilenet():
-    net = MobileNetV2()
-    flat_params = net.get_flat_params()
-    print(flat_params)
-    net2= MobileNetV2()
-    v1 = net2.get_flat_params()
-    print(v1)
-    net2.set_flat_params(flat_params)
-    v2 = net2.get_flat_params()
-    print(v2)
-
-def test_vgg():
-    net = VGG('VGG11')
-    x = torch.randn(2,3,32,32)
-    y = net(x)
-    print(y.size())
-
-#test_mobilenet()
-#test_vgg()
