@@ -28,6 +28,7 @@ class Trainer:
 		torch.backends.cudnn.deterministic = True
 		self.device = torch.device("cuda:%d" % (args.gpu) if torch.cuda.is_available() else "cpu")
 		torch.cuda.set_device(args.gpu)
+		self.set_seed(args.seed)
 		self.dataset = Cifar10()
 		self.saver = Saver(self.save_dir)
 		if args.arch == 'auto':
@@ -41,6 +42,10 @@ class Trainer:
 		else:
 			raise Exception('Net not defined!')
 
+	def set_seed(self, seed):
+		torch.manual_seed(seed)
+		np.random.seed(seed)
+
 	def _setup_logger(self):
 		self.save_dir = os.path.join('./checkpoints', args.logdir)
 		if not os.path.isdir(self.save_dir):
@@ -52,11 +57,12 @@ class Trainer:
 	
 	def test_beta(self, optimizee):
 		self.logger.info('Testing beta')
-		torch.manual_seed(2 * args.seed)
+		self.set_seed(2 * args.seed)
 		optimizee.reset_model_parameters()
 		scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizee.optimizer, 
 							float(args.max_epoch), eta_min=args.learning_rate_min)
 		optimizee.optimizer.print_beta_greedy()
+		optimizee.optimizer.beta_temp = args.max_beta_temp
 		for epoch in range(0, args.max_test_epoch):
 			scheduler.step()
 			lr = scheduler.get_lr()[0]
@@ -65,13 +71,14 @@ class Trainer:
 				acc = self.eval(optimizee.model)
 
 	def train(self):
+		self.set_seed(args.seed)
 		optimizee = Optimizee(self.Net)
 		start_episode, start_epoch, best_test_acc = 0, 0, 0.
 		if args.checkpoint != '':
 			start_episode, start_epoch = self.saver.load_checkpoint(optimizee, args.checkpoint) 
 		# Hao: in my implementation, the optimizers for alpha and beta will preserve their states across episodes
 		for episode in range(start_episode, args.max_episodes):
-			torch.manual_seed(args.seed + episode)
+			self.set_seed(args.seed + episode)
 			optimizee.reset_model_parameters()
 			if args.arch == 'auto':
 				optimizee.reset_arch_parameters()
@@ -98,7 +105,6 @@ class Trainer:
 			self.saver.write_beta_embedding()
 			optimizee.optimizer.print_beta_greedy()
 		else:
-			optimizee.optimizer.beta_temp = args.max_beta_temp
 			status = self._train_epoch_fix_beta(epoch, lr, optimizee)
 		return status
 	
@@ -128,7 +134,10 @@ class Trainer:
 			loss = optimizee.model.forward_pass(x_train, y_train)
 			loss.backward()
 			model_grad_norms += nn.utils.clip_grad_norm_(optimizee.model.parameters(), args.model_grad_norm)
-			param_updates = optimizee.optimizer.step()
+			if epoch == 0:
+				param_updates, choices = optimizee.optimizer.step(use_gumble=False)
+			else:
+				param_updates, choices = optimizee.optimizer.step()
 
 			# do a differentiable step of update over optimizee.symbolic_model
 			optimizee.differentiable_update(param_updates)
@@ -137,21 +146,22 @@ class Trainer:
 			# so that it is on the computational graph
 			# TODO use validation data? not sure
 			next_step_loss = optimizee.symbolic_model.forward_pass(x_train, y_train)
-			if(math.isnan(next_step_loss.item())):
-				self.logger.error('next step loss becomes NaN, break')
-				raise Exception
+			if(math.isnan(next_step_loss.item()) or next_step_loss.item() > 1e10):
+				next_step_loss = sum([choice.sum() for choice in choices]) # use choices.sum() as proxy to bp
+				#self.logger.error('next step loss becomes NaN')
+				#raise Exception
 			next_step_losses += next_step_loss.item()
 			losses += loss.item()
 			meta_update_losses += next_step_loss
 			
-			# do a non-differentiable update over optimizee.model if next_step_loss is smaller
-			if (next_step_loss.item() < loss.item()): # This is still important for performance
+			# do a non-differentiable update over optimizee.model if next_step_loss is smaller or at increasing probability
+			if (next_step_loss.item() < loss.item()):# or np.random.rand() < (float(epoch)/args.max_epoch)): 
 				optimizee.update(param_updates)
 
 			# forsee bptt_steps then update beta
 			if (i + 1) % args.bptt_step == 0:
-				beta_grad_norms += optimizee.beta_step(meta_update_losses).item()
-				# let saver save the grads for beta
+				beta_grad_norms += optimizee.beta_step(meta_update_losses)
+				# let saver save the grads for bete
 				with torch.no_grad():
 					self.saver.add_beta_grads([b.grad.abs().mean() for b in optimizee.optimizer.beta])
 				meta_update_losses = 0
@@ -180,7 +190,7 @@ class Trainer:
 			loss = optimizee.model.forward_pass(x_train, y_train)
 			loss.backward()
 			model_grad_norms += nn.utils.clip_grad_norm_(optimizee.model.parameters(), args.model_grad_norm)
-			param_updates = optimizee.optimizer.step(do_update = True)
+			param_updates, _ = optimizee.optimizer.step(do_update = True)
 			losses += loss.item()
 			if args.use_darts_arch and args.train_alpha:
 				optimizee.alpha_step(x_train, y_train, x_val, y_val, lr)

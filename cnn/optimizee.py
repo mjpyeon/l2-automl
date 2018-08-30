@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from auto_optimizer import AutoOptimizer
 from args import args
 import logger as L
+import math
 
 def _concat(xs):
   return torch.cat([x.view(-1) for x in xs])
@@ -88,6 +89,12 @@ class Optimizee:
 		self.beta_optimizer.zero_grad()
 		meta_update_loss.backward()
 		
+		# check if grad is nan
+		for beta in self.optimizer.beta:
+			if math.isnan(beta.grad.mean().item()):
+				self.detach()
+				return float('nan')
+
 		#normalize bptt grad
 		if args.normalize_bptt:
 			for beta in self.optimizer.beta:

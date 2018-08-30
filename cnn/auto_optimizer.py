@@ -126,6 +126,37 @@ class AutoOptimizer(optim.Optimizer):
 	def ele_mul(self, b, a):
 		return (b * a.transpose(0, len(a.size())-1)).transpose(len(a.size())-1,0)
 
+	def gumble_transform_beta(self, beta, maskIdx=0, maskStart=0):
+		def sample_gumbel(shape, eps=1e-20):
+		    U = torch.rand(shape).cuda()
+		    return -Variable(torch.log(-torch.log(U + eps) + eps))
+
+		def gumbel_softmax_sample(logits, temperature):
+		    y = logits + sample_gumbel(logits.size())
+		    return F.softmax(y / temperature, dim=-1)
+
+		def gumbel_softmax(logits, temperature):
+		    """
+		    ST-gumple-softmax
+		    input: [*, n_class]
+		    return: flatten --> [*, n_class] an one-hot vector
+		    """
+		    y = gumbel_softmax_sample(logits, temperature)
+		    shape = y.size()
+		    _, ind = y.max(dim=-1)
+		    y_hard = torch.zeros_like(y).view(-1, shape[-1])
+		    y_hard.scatter_(1, ind.view(-1, 1), 1)
+		    y_hard = y_hard.view(*shape)
+		    y_hard = (y_hard - y).detach() + y
+		    if(math.isnan(y_hard.mean().item())):
+		    	pdb.set_trace()
+		    	pass
+		    return y_hard
+		beta = torch.cat([self.cons, beta])
+		if(maskIdx > 0):
+			beta[maskStart:maskIdx] = -np.inf
+		return gumbel_softmax(beta, 1.0/self.beta_temp)
+
 	def transform_beta(self, beta, maskIdx=0, maskStart=0):
 		beta = torch.cat([self.cons, beta])
 		if(maskIdx > 0):
@@ -139,10 +170,7 @@ class AutoOptimizer(optim.Optimizer):
 			beta_ = []
 			for graph_idx in range(num_subgraph):
 				start = graph_idx * 5
-				ops_mask, binary_mask = 0, 0
-				if(graph_idx > 0 and torch.max(self.beta[start+0],0)[1] < 15):
-					ops_mask = 16
-					binary_mask = 5
+				ops_mask, binary_mask = self.check_beta_mask(start)
 				op1_beta = self.transform_beta(self.beta[start+0]).data.cpu().numpy()
 				op2_beta = self.transform_beta(self.beta[start+1], ops_mask).data.cpu().numpy()
 				u1_beta = self.transform_beta(self.beta[start+2]).data.cpu().numpy()
@@ -182,12 +210,16 @@ class AutoOptimizer(optim.Optimizer):
 									#torch.abs(left).pow(right.clamp(max=5))), 0)
 		return self.ele_mul(beta_, binary_funcs).sum(0)
 
-	def graph(self, ops, start=0):
-		ops_mask = 0
-		binary_mask = 0
-		if(start > 1 and torch.max(self.beta[start+0],0)[1] < 15):
+	def check_beta_mask(self, graph_start_idx):
+		ops_mask, binary_mask = 0, 0
+		# not first graph and first op not reuse, set mask
+		if(graph_start_idx > 1 and torch.max(self.beta[graph_start_idx+0],0)[1] < 15):
 			ops_mask = 16
 			binary_mask = 5
+		return ops_mask, binary_mask
+
+	def graph(self, ops, start=0):
+		ops_mask, binary_mask = self.check_beta_mask(start)
 		op1 = self.operand(self.beta[start+0], ops) # [1, dim]
 		op2 = self.operand(self.beta[start+1], ops, ops_mask) # [1, dim]
 		u1 = self.unary(self.beta[start+2], op1) # [1, dim]
@@ -208,11 +240,70 @@ class AutoOptimizer(optim.Optimizer):
 		g4 = self.graph(ops, 15)
 		return g4
 
-	def step(self, do_update=False, closure=None, virtual=False):
+	def gumble_hierarchical_graph(self, ops, choices):
+		'''
+		Args
+			choices: shape as self.num_ops, intermediate tensor from gumble sampling
+		'''
+		def operand(choice, ops):
+			return self.ele_mul(choice, ops).sum(0)
+
+		def unary(choice, input):
+			input = input.unsqueeze(0)
+			unary_funcs = torch.cat((input, -input, torch.sqrt(torch.abs(input) + 1e-12), torch.sign(input), #), 0)
+									torch.log(torch.abs(input).clamp(min=0.1) + self.eps), torch.exp(input.clamp(max=2))),0)
+			return self.ele_mul(choice, unary_funcs).sum(0)
+
+		def binary(choice, left, right):
+			left = left.unsqueeze(0)
+			right = right.unsqueeze(0)
+			binary_funcs = torch.cat((left+right,left-right, left*right,left/(right + self.eps), left),0)#, 
+										#torch.abs(left).pow(right.clamp(max=5))), 0)
+			return self.ele_mul(choice, binary_funcs).sum(0)
+		def graph(ops, choices):
+			op1 = operand(choices[0], ops) # [1, dim]
+			op2 = operand(choices[1], ops) # [1, dim]
+			u1 = unary(choices[2], op1) # [1, dim] DEBUG WRONG
+			u2 = unary(choices[3], op2) # [1, dim]
+			b1 = binary(choices[4], u1, u2)
+			return b1
+		ops = torch.autograd.Variable(ops, requires_grad=False) # [num_ops, dim]
+		g1 = graph(ops, choices[0:5])
+		ops = torch.cat([ops,g1.unsqueeze(0)])
+		g2 = graph(ops, choices[5:10])
+		ops = torch.cat([ops,g2.unsqueeze(0)])
+		g3 = graph(ops, choices[10:15])
+		ops = torch.cat([ops,g3.unsqueeze(0)])
+		g4 = graph(ops, choices[15:20])
+		return g4
+
+	def print_choices(self, choices):
+		with torch.no_grad():
+			choice_list = [c.max(0)[1].item() for c in choices]
+		self.logger.info('sampled choices: {}'.format(choice_list))
+
+	def gumble_sample_choices(self):
+		choices = []
+		for beta_idx in range(len(self.num_ops)):
+			start_idx = beta_idx // 5
+			ops_mask, binary_mask = self.check_beta_mask(start_idx)
+			if((beta_idx + 1) % 5 == 0): # if binary operation
+				choice = self.gumble_transform_beta(self.beta[beta_idx], binary_mask, 4)
+			elif(beta_idx%5 == 1): # second operand
+				choice = self.gumble_transform_beta(self.beta[beta_idx], ops_mask)
+			else:
+				choice = self.gumble_transform_beta(self.beta[beta_idx])
+			choices.append(choice)
+		return choices
+
+
+
+
+	def step(self, do_update=False, closure=None, virtual=False, use_gumble=True):
 		loss = None
 		if closure is not None:
 			loss = closure()
-
+		choices = self.gumble_sample_choices()
 		params_updates = []
 		for group in self.param_groups:
 			for p in group['params']:
@@ -261,9 +352,13 @@ class AutoOptimizer(optim.Optimizer):
 						1e-1*p.data
 					]
 				ops = [op.unsqueeze(0) for op in ops]
-				update = self.hierarchical_graph(torch.cat(ops, 0))#.clamp(min=-2, max=2)
+				if use_gumble:
+					update = self.gumble_hierarchical_graph(torch.cat(ops, 0), choices)#.clamp(min=-2, max=2)
+				else:
+					update = self.hierarchical_graph(torch.cat(ops, 0))#.clamp(min=-2, max=2)
+
 				#update = self.hard_graph(torch.cat(ops, 0), [7, 2, 0, 2, 2])
 				if do_update:
 					p.data.add_(-torch.exp(self.lr_scaling).item() * group['lr'], update.data)	
 				params_updates += [-torch.exp(self.lr_scaling) * group['lr'] * update]
-		return params_updates
+		return params_updates, choices
