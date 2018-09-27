@@ -12,6 +12,7 @@ from auto_optimizer import AutoOptimizer
 from args import args
 import logger as L
 import math
+import pdb
 
 def _concat(xs):
   return torch.cat([x.view(-1) for x in xs])
@@ -34,7 +35,9 @@ class Optimizee:
 		# create the auto learned optimizer
 		self.symbolic_model = copy.deepcopy(self.model)
 		self.optimizer = AutoOptimizer(self.model.parameters(), lr = args.learning_rate)
-		self.beta_optimizer = torch.optim.Adam(self.optimizer.optim_parameters() + [self.optimizer.lr_scaling], lr = args.beta_learning_rate)
+		self.beta_optimizer = torch.optim.SGD(self.optimizer.optim_parameters(), lr = args.beta_learning_rate, momentum=0.9)
+		#self.traditional_optimizer = torch.optim.RMSprop(self.model.parameters(), lr = args.learning_rate)
+		self.logger.info('beta optimizer: {}'.format(type(self.beta_optimizer)))
 
 	def sync_symbolic_model(self, skip_weights=False):
 		if skip_weights == False:
@@ -42,12 +45,13 @@ class Optimizee:
 		if args.arch == 'auto':
 			self.symbolic_model.set_arch_paramters(self.model.arch_parameters)
 
-	def update(self, updates):
+	def update(self, updates, params_grad):
 		"""
 		non-differentiable update
 		"""
 		for param, update in zip(self.model.parameters(), updates):
 			param.data.add_(update.data)
+		#self.optimizer.update_states(params_grad)
 	
 	def differentiable_update(self, updates):
 		"""
@@ -85,26 +89,32 @@ class Optimizee:
 					_iter_child(child)
 		_iter_child(self.symbolic_model)
 
+
 	def beta_step(self, meta_update_loss):
 		self.beta_optimizer.zero_grad()
 		meta_update_loss.backward()
 		
+		for beta in self.optimizer.beta:
+			if beta.grad is None:
+				beta.grad = torch.zeros_like(beta)
+
 		# check if grad is nan
 		for beta in self.optimizer.beta:
 			if math.isnan(beta.grad.mean().item()):
 				self.detach()
-				return float('nan')
+				return torch.Tensor([float('nan')])
 
 		#normalize bptt grad
 		if args.normalize_bptt:
 			for beta in self.optimizer.beta:
 				beta.grad /= args.bptt_step
-			self.optimizer.lr_scaling.grad /= args.bptt_step
-		
+			#if self.optimizer.lr_scaling.grad is not None:
+			#	self.optimizer.lr_scaling.grad /= args.bptt_step
+
 		# add entropy penalty and derive respective grads
-		self.optimizer.beta_entropy(args.beta_entropy_penalty)
+		# self.optimizer.beta_entropy(args.beta_entropy_penalty)
 		# grad normalization
-		beta_grad_norms = nn.utils.clip_grad_norm_(self.optimizer.beta + [self.optimizer.lr_scaling], args.beta_grad_norm)
+		beta_grad_norms = nn.utils.clip_grad_norm_(self.optimizer.beta, args.beta_grad_norm)
 		# perform an update on beta
 		self.beta_optimizer.step()
 		# then detach the params of symbolic_model from its past
@@ -220,6 +230,12 @@ class Optimizee:
 
 	def reset_optimizer_parameters(self):
 		self.optimizer.set_beta(self.optimizer.gen_beta())
+		self.reset_optimizer_state()
+
+	def reset_optimizer_state(self):
+		for k in self.optimizer.state.keys():
+			self.optimizer.state[k] = {}
+		self.optimizer.param_groups[0]['lr'] = args.learning_rate
 
 	def state_dict(self):
 		state_dict = {}

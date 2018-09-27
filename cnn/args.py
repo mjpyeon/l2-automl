@@ -29,6 +29,7 @@ parser.add_argument('--learning_rate_min', type=float, default=0.001, help='min 
 parser.add_argument('--learning_rate', type=float, default=1e-3, help='init learning rate')
 parser.add_argument('--batch_size', type=int, default=4, help='batch_size for training')
 parser.add_argument('--checkpoint', type=str, default='', help='folder path to load saved model & meta optim')
+parser.add_argument('--message', type=str, default='Default', help='training message to log')
 
 # args for meta optimizer
 parser.add_argument('--beta_entropy_penalty', type=float, default=0.1, help='ratio of entropy loss / normal loss')
@@ -38,8 +39,11 @@ parser.add_argument('--beta_grad_norm', type=float, default=1.0, help='max grad 
 parser.add_argument('--normalize_bptt', type=bool, default=True, help='Noramlize the gradient of beta by bptt steps?')
 parser.add_argument('--use_darts_arch', action='store_true', default=False, help='use darts architecture')
 parser.add_argument('--bptt_step', type=int, default=1, help='steps for bptt')
-parser.add_argument('--max_beta_temp', type=float, default=100, help='max beta temperature')
-parser.add_argument('--min_beta_temp', type=float, default=100, help='min beta temperature')
+parser.add_argument('--max_gumbel_temp', type=float, default=1, help='max gumbel temperature')
+parser.add_argument('--min_gumbel_temp', type=float, default=0.1, help='min gumbel temperature')
+parser.add_argument('--gumbel_anneal_rate', type=float, default=0.00003, help='anneal rate of gumbel temp')
+parser.add_argument('--max_beta_inv_temp', type=float, default=100, help='max beta temperature')
+parser.add_argument('--min_beta_inv_temp', type=float, default=100, help='min beta temperature')
 parser.add_argument('--use_traditional_opt', action='store_true', default=False, help='use traditional optimizer')
 parser.add_argument('--save_beta_path', type=str, default='', help='saved beta value')
 parser.add_argument('--fixed_beta', action='store_true', default=False, help='use fixed beta, no training on beta')
