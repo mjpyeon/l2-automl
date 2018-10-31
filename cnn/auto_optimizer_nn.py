@@ -109,6 +109,18 @@ class AutoOptimizer(optim.Optimizer):
 				params_updates += [-group['lr'] * update]
 		return params_updates
 
+class quadratic_problem:
+	"""Quadratic problem: f(x) = ||Wx - y||."""
+	def __init__(self, batch_size=128, num_dims=10):
+		self.w = torch.randn([batch_size, num_dims, num_dims]).cuda()
+		self.y = torch.randn([batch_size, num_dims]).cuda()
+	def loss(self, x):
+		# x - [batch_size, num_dim]
+		x = x.unsqueeze(2) # [batch_size, num_dim, 1]
+		return ((torch.bmm(self.w, x).squeeze(2) - self.y).sum(1) ** 2).mean()
+
+
+
 if __name__ == '__main__':
 	def convex_curve(x):
 		return (x[0]-5) ** 2 + (x[1]+5) ** 2
