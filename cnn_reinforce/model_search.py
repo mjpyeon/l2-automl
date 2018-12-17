@@ -20,9 +20,15 @@ class MixedOp(nn.Module):
       self._ops.append(op)
 
   def forward(self, x, weights):
-    weights_ = weights.data.cpu().numpy().astype(int)[0]
-    return self._ops[weights_](x)
-
+    weights_ = weights.data.cpu().numpy().astype(int)
+    #print(weights_)
+    if weights_[1] == 1:
+        #return sum(w * op(x) for w, op in zip(weights, self._ops))
+        # print(torch.max(weights, 0)[1].data.cpu().numpy()[0])
+        return self._ops[weights_[0]](x)
+    else:
+        #return self._ops[weights_[0]](x)
+        return 0
 
 
 class Cell(nn.Module):
@@ -55,6 +61,10 @@ class Cell(nn.Module):
     offset = 0
     # print(s0.shape, s1.shape)
     for i in range(self._steps):
+      # for j, h in enumerate(states):
+      #     tmp = self._ops[offset+j](h, weights[offset+j])
+      #     if not isinstance(tmp, int):
+      #         print(tmp.shape)
 
       s = sum(self._ops[offset+j](h, weights[offset+j]) for j, h in enumerate(states))
       offset += len(states)
@@ -124,36 +134,13 @@ class Network(nn.Module):
     self.k = sum(1 for i in range(self._steps) for n in range(2+i))
     self.num_ops = len(PRIMITIVES)
 
-    self.alphas = Variable(1e-3*torch.randn(self.k*2, self.num_ops).cuda(), requires_grad=True)
-    self._arch_parameters = [self.alphas]
-
-    # self.alphas = []
-    # for i in range(self.k*2):
-    #     self.alphas.append(Variable(1e-3*torch.randn(self.num_ops-1).cuda(), requires_grad=True))
-    #
-    # self.betas = []
-    # start = 0
-    # nums = 2
-    # q_dim = self.k * 2 * (self.num_ops - 1)
-    # while start < self.k*2:
-    #     if start % self.k != 0:
-    #         self.betas.append(Variable(1e-3*torch.randn(nums).cuda(), requires_grad=True))
-    #         q_dim += nums * (nums - 1) / 2
-    #     start = start+nums
-    #     nums += 1
-    #     if start == self.k:
-    #         nums = 2
-    # self.q_dim = q_dim
-    #self.disc_dim = self.k * (self.num_ops) * 2 - 4
-    # self.arch_params = Variable(1e-3*torch.randn(self.k*2, self.num_ops).cuda(), requires_grad=True) # check whether the init is right
-    # self.betas = []
-    # for i in range(1, self._steps):
-    #     self.betas.append(Variable(1e-3*torch.randn(i+2).cuda(), requires_grad=True))
-    #     self.disc_dim += (i+2) * (i + 1)
-    # for i in range(1, self._steps):
-    #     self.betas.append(Variable(1e-3*torch.randn(i+2).cuda(), requires_grad=True))
-
-    # self._arch_parameters = self.alphas+self.betas #torch.cat([para.view(-1) for para in [self.alphas] + self.betas])
+    self.disc_dim = self.k * self.num_ops * 2
+    self.alphas = Variable(torch.zeros(self.k*2, self.num_ops-1).cuda(), requires_grad=True) # check whether the init is right
+    self.betas = Variable(torch.zeros(self.k*2).cuda(), requires_grad=True)
+    self._arch_parameters = [
+      self.alphas,
+      self.betas
+    ]
 
   def arch_parameters(self):
     return self._arch_parameters
@@ -190,28 +177,54 @@ class Network(nn.Module):
     return genotype
 
   def genotype_binary(self):
-    def _parse(weights):
+    def _parse(weights, betas):
       gene = []
       n = 2
       start = 0
       for i in range(self._steps):
         end = start + n
         W = weights[start:end].copy()
+        bbb = betas[start:end].copy()
         for j in range(i + 2):
-          if int(W[j]) != 0:
-              gene.append((PRIMITIVES[int(W[j])], j, i+2))
+          if bbb[j] == 1:
+              gene.append((PRIMITIVES[int(W[j])], j))
         start = end
         n += 1
       return gene
 
-    hard_samples = torch.max(torch.stack(self.alphas),1)[1].float()
+    hard_samples = torch.max(self.alphas,1)[1] + 1
+    # hard_samples_oh = Variable(torch.FloatTensor(hard_samples.shape[0], self.num_ops).cuda(), requires_grad=False)
+    # hard_samples_oh.zero_()
+    # hard_samples_oh.scatter_(1, hard_samples.unsqueeze(1), 1)
 
-    gene_normal = _parse(hard_samples[:self.k].data.cpu().numpy())
-    gene_reduce = _parse(hard_samples[self.k:].data.cpu().numpy())
+    start = 0
+    length = 2
+    ret = []
+    while start + length <= self.betas.shape[0]:
+        tmp = self.betas[start:start + length]
+        probs1 = F.softmax(tmp)
+        sample1 = torch.max(probs1, 0)[1]
+        probs2 = probs1.clone()
+        probs2[sample1] = 0
+        probs2 /= probs2.sum()
+        sample2 = torch.max(probs2, 0)[1]
+        # print(sample1.data.cpu().numpy(), sample2.data.cpu().numpy(), probs1.data.cpu().numpy())
+        assert(sample1.data.cpu().numpy() != sample2.data.cpu().numpy())
+        sample = to_onehot(sample1, length) + to_onehot(sample2, length)
+        # print(sample)
+        ret.append(sample.squeeze())
+        start = start + length
+        length += 1
+        if start == 14:
+            length = 2
+    hard_betas = torch.cat(ret)
+
+    gene_normal = _parse(hard_samples[:self.k].data.cpu().numpy(), hard_betas[:self.k].data.cpu().numpy())
+    gene_reduce = _parse(hard_samples[self.k:].data.cpu().numpy(), hard_betas[self.k:].data.cpu().numpy())
 
     concat = range(2+self._steps-self._multiplier, self._steps+2)
     genotype = Genotype(
       normal=gene_normal, normal_concat=concat,
       reduce=gene_reduce, reduce_concat=concat
     )
-    return genotype, hard_samples.split(self.k)
+    return genotype, torch.cat([hard_samples.float().unsqueeze(1), hard_betas.unsqueeze(1)], 1).split(self.k)

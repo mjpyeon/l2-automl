@@ -16,7 +16,7 @@ import torch.backends.cudnn as cudnn
 from torch.autograd import Variable
 from model_search import Network
 from architect import Architect
-from relax import RelaxOptimizer, ArmOptimizer, CategoricalRelaxOptimizer1, ReinforceOptimizer
+from relax import RelaxOptimizer, ArmOptimizer, CategoricalRelaxOptimizer, ReinforceOptimizer
 
 
 parser = argparse.ArgumentParser("cifar")
@@ -38,15 +38,15 @@ parser.add_argument('--drop_path_prob', type=float, default=0.3, help='drop path
 parser.add_argument('--save', type=str, default='EXP', help='experiment name')
 parser.add_argument('--seed', type=int, default=2, help='random seed')
 parser.add_argument('--grad_clip', type=float, default=5, help='gradient clipping')
-parser.add_argument('--train_portion', type=float, default=0.5, help='portion of training data')
+parser.add_argument('--train_portion', type=float, default=0.9, help='portion of training data')
 parser.add_argument('--unrolled', action='store_true', default=False, help='use one-step unrolled validation loss')
-parser.add_argument('--arch_learning_rate', type=float, default=0.1, help='learning rate for arch encoding')
-parser.add_argument('--arch_reg_weight', type=float, default=0.1, help='reg weight for arch encoding')
+parser.add_argument('--arch_learning_rate', type=float, default=0.001, help='learning rate for arch encoding')
+parser.add_argument('--arch_reg_weight', type=float, default=10, help='reg weight for arch encoding')
 #parser.add_argument('--rampdown_length', type=float, default=100, help='reg weight for arch encoding')
-parser.add_argument('--cv_learning_rate', type=float, default=0.03, help='learning rate for cv')
-parser.add_argument('--cv_hidden', type=int, default=50, help='hidden size for cv')
-# parser.add_argument('--smoothing_factor', type=float, default=0.8, help='smoothing_factor for cv')
-# parser.add_argument('--num_arch_samples', type=int, default=5, help='num_arch_samples')
+#parser.add_argument('--cv_learning_rate', type=float, default=0.03, help='learning rate for cv')
+#parser.add_argument('--cv_hidden', type=int, default=50, help='hidden size for cv')
+parser.add_argument('--smoothing_factor', type=float, default=0.8, help='smoothing_factor for cv')
+parser.add_argument('--num_arch_samples', type=int, default=5, help='num_arch_samples')
 args = parser.parse_args()
 
 args.save = 'search-{}-{}'.format(args.save, time.strftime("%Y%m%d-%H%M%S"))
@@ -110,7 +110,7 @@ def main():
         optimizer, float(args.epochs), eta_min=args.learning_rate_min)
 
   #architect = Architect(model, args)
-  architect = CategoricalRelaxOptimizer1(model, args)
+  architect = ReinforceOptimizer(model, args)
 
   for epoch in range(args.epochs):
     # if epoch == 0:
@@ -127,7 +127,8 @@ def main():
     logging.info('genotype = %s', genotype)
 
     #print(arch)
-    print(model.alphas.data.cpu().numpy())
+    tmp = torch.cat([model.betas.unsqueeze(1), model.alphas], 1)
+    print(tmp.data.cpu().numpy())
 
     # training
     train_acc, train_obj = train(train_queue, valid_queue, model, architect, criterion, optimizer, lr, epoch)
@@ -145,9 +146,8 @@ def train(train_queue, valid_queue, model, architect, criterion, optimizer, lr, 
   regs = utils.AvgrageMeter()
   top1 = utils.AvgrageMeter()
   top5 = utils.AvgrageMeter()
-  vars = utils.AvgrageMeter()
 
-  ent_weight = args.arch_reg_weight * (0.9120108393559098 ** (min(epoch, 50)))
+  ent_weight = args.arch_reg_weight * (0.9261187281287935 ** (min(epoch, 60)))
 
   for step, (input, target) in enumerate(train_queue):
     model.train()
@@ -170,17 +170,16 @@ def train(train_queue, valid_queue, model, architect, criterion, optimizer, lr, 
     # loss.backward()
     # nn.utils.clip_grad_norm(model.parameters(), args.grad_clip)
     # optimizer.step()
-    logits, loss, reg, var_loss = architect.step(input, target, input_search, target_search, criterion, optimizer, unrolled=args.unrolled, ent_weight=ent_weight)
+    logits, loss, reg = architect.step(input, target, input_search, target_search, criterion, optimizer, unrolled=args.unrolled, ent_weight=ent_weight)
 
     prec1, prec5 = utils.accuracy(logits, target, topk=(1, 5))
     objs.update(loss.data[0], n)
     regs.update(reg.data[0], n)
     top1.update(prec1.data[0], n)
     top5.update(prec5.data[0], n)
-    vars.update(var_loss.data[0], n)
 
     if step % args.report_freq == 0:
-      logging.info('train %03d %f %f %f %f %f, ent_weight %f', step, objs.avg, regs.avg, vars.avg, top1.avg, top5.avg, ent_weight)
+      logging.info('train %03d %f %f %f %f, ent_weight %f', step, objs.avg, regs.avg, top1.avg, top5.avg, ent_weight)
 
   return top1.avg, objs.avg
 
