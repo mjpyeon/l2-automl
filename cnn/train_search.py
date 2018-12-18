@@ -41,10 +41,11 @@ parser.add_argument('--grad_clip', type=float, default=5, help='gradient clippin
 parser.add_argument('--train_portion', type=float, default=0.5, help='portion of training data')
 parser.add_argument('--unrolled', action='store_true', default=False, help='use one-step unrolled validation loss')
 parser.add_argument('--arch_learning_rate', type=float, default=0.1, help='learning rate for arch encoding')
-parser.add_argument('--arch_reg_weight', type=float, default=0.1, help='reg weight for arch encoding')
+parser.add_argument('--arch_reg_weight', type=float, default=0.001, help='reg weight for arch encoding')
 #parser.add_argument('--rampdown_length', type=float, default=100, help='reg weight for arch encoding')
 parser.add_argument('--cv_learning_rate', type=float, default=0.03, help='learning rate for cv')
 parser.add_argument('--cv_hidden', type=int, default=50, help='hidden size for cv')
+parser.add_argument('--num_history', type=int, default=10, help='num of history')
 # parser.add_argument('--smoothing_factor', type=float, default=0.8, help='smoothing_factor for cv')
 # parser.add_argument('--num_arch_samples', type=int, default=5, help='num_arch_samples')
 args = parser.parse_args()
@@ -147,7 +148,7 @@ def train(train_queue, valid_queue, model, architect, criterion, optimizer, lr, 
   top5 = utils.AvgrageMeter()
   vars = utils.AvgrageMeter()
 
-  ent_weight = args.arch_reg_weight * (0.9120108393559098 ** (min(epoch, 50)))
+  ent_weight = args.arch_reg_weight# * (0.9120108393559098 ** (min(epoch, 50)))
 
   for step, (input, target) in enumerate(train_queue):
     model.train()

@@ -65,13 +65,16 @@ class QFunc(torch.nn.Module):
 class CategoricalRelaxOptimizer1(object):
     def __init__(self, model, args):
       self.model = model
-      self.logit_optim =torch.optim.Adam(model.arch_parameters(), lr=args.arch_learning_rate, weight_decay=1e-4)#
+      self.logit_optim =torch.optim.Adam(model.arch_parameters(), lr=args.arch_learning_rate)#
 
       self.log_temp = Variable(torch.zeros(model.k * 2).cuda(), requires_grad=True)
       self.scale = Variable(torch.ones(1).cuda(), requires_grad=True)
       self.q_func = QFunc(int(model.k * 2 * model.num_ops), scale=self.scale, hidden_size=args.cv_hidden).cuda()
       self.cv_optim = torch.optim.Adam([self.log_temp, self.scale] + list(self.q_func.parameters()), lr=args.cv_learning_rate)
       self.args = args
+      self.num_history = args.num_history
+      self.history_f = Variable(torch.zeros(self.num_history).cuda(), requires_grad=False)
+      self.idx_f = 0
 
     def step(self, input_train, target_train, input_valid, target_valid, criterion, network_optimizer, unrolled, ent_weight):
         def _make_samples(alphas):
@@ -122,6 +125,14 @@ class CategoricalRelaxOptimizer1(object):
         # clf_loss_detach = clf_loss.detach()
         clf_logits_valid = self.model(input_valid, arch)
         clf_loss_detach = criterion(clf_logits_valid, target_valid).detach()
+        clf_loss_detach_normed = (clf_loss_detach - self.history_f.mean()) / self.history_f.std()
+        self.history_f[self.idx_f % self.num_history] = clf_loss_detach
+
+        #tmp = self.history_f.data.cpu().numpy()
+        #print(", ".join(["{:.2f}".format(tmp[(self.idx_f-i)%self.num_history]) for i in range(self.num_history)]))
+        self.idx_f += 1
+        if self.idx_f <= self.num_history:
+            return clf_logits, clf_loss, Variable(torch.Tensor([0]).cuda()), Variable(torch.Tensor([0]).cuda())
 
         samples_onehot = list(samples_onehot)
         z_inputs, z_tilde_inputs = [], []
@@ -145,7 +156,7 @@ class CategoricalRelaxOptimizer1(object):
 
         var_loss = 0
         for i in range(self.model.k*2):
-            tmp_grad = ddiff_grads[i]+(clf_loss_detach - f_z_tilde[i, 0]) * logp_grads[i].detach()
+            tmp_grad = ddiff_grads[i]+(clf_loss_detach_normed - f_z_tilde[i, 0]) * logp_grads[i].detach()
             var_loss += (tmp_grad**2).sum()
             self.model.alphas[i].backward(tmp_grad + entropy_grads[i])
         #grads = ddiff_grads + (clf_loss.detach() - f_z_tilde) * logp_grads.detach()
