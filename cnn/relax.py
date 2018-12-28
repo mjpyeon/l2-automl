@@ -9,6 +9,8 @@ import torch
 from torch.autograd import Variable
 import torch.nn as nn
 from torch.nn.functional import relu, binary_cross_entropy, softmax, log_softmax
+import time
+import utils
 
 class HLoss(nn.Module):
     def __init__(self):
@@ -58,9 +60,121 @@ class QFunc(torch.nn.Module):
         z = self.nonlin(z)
         z = self.h2(z)
         z = self.nonlin(z)
-        z = self.out(z) * self.scale
+        z = self.out(z)
+        if not self.scale is None:
+            z = z * self.scale
         return z
 
+
+class CategoricalRelaxOptimizer2(object):
+    def __init__(self, model, args):
+      self.model = model
+      self.logit_optim =torch.optim.Adam(model.arch_parameters(), lr=args.arch_learning_rate)#
+
+      self.num_alphas = int(model.k * 2 * model.num_ops)
+      self.q_func = QFunc(self.num_alphas, scale=None, hidden_size=args.cv_hidden).cuda()
+      self.cv_optim = torch.optim.Adam(self.q_func.parameters(), lr=args.cv_learning_rate, betas=(args.cv_beta1, 0.999))
+      self.args = args
+      self.num_samples = 50
+      self.mask = Variable(torch.zeros(model.k*2*self.num_samples, self.num_alphas).cuda(), requires_grad=False)
+      for i in range(model.k*2):
+          self.mask[i*self.num_samples: (i+1)*self.num_samples, i*model.num_ops: (i+1)*model.num_ops] = 1
+      self.mask = (1-self.mask)
+
+
+    def step(self, input_train, target_train, input_valid, target_valid, criterion, network_optimizer, unrolled, ent_weight):
+        self.logit_optim.zero_grad()
+        self.cv_optim.zero_grad()
+
+        sto_alphas = torch.distributions.Categorical(softmax(self.model.alphas, 1))
+        sample_alphas = sto_alphas.sample()
+        arch = sample_alphas.float().split(self.model.k)
+        #print(arch)
+        t0 = -time.time()
+        network_optimizer.zero_grad()
+        clf_logits = self.model(input_train, arch)
+        clf_loss = criterion(clf_logits, target_train)
+
+        clf_loss.backward()
+        nn.utils.clip_grad_norm(self.model.parameters(), self.args.grad_clip)
+        network_optimizer.step()
+        t0 += time.time()
+        t1 = -time.time()
+
+        q_inputs_train = []
+        q_outputs_train = []
+        for ite in range(5):
+            sample_alphas = sto_alphas.sample()
+            clf_logits_valid = self.model(input_valid, sample_alphas.float().split(self.model.k)).detach()
+            clf_loss_detach = 1-utils.accuracy(clf_logits_valid, target_valid)[0]/50. #criterion(clf_logits_valid, target_valid).detach()
+            #print(clf_loss_detach)
+
+            samples_onehot_flatten = to_onehot(sample_alphas, self.model.num_ops).view(-1)
+            q_inputs_train.append(samples_onehot_flatten)
+            q_outputs_train.append(clf_loss_detach)
+
+            q_sample_alphas_onehot = to_onehot(sto_alphas.sample_n(self.num_samples).t().contiguous().view(-1), self.model.num_ops)
+            q_inputs = samples_onehot_flatten.repeat(self.model.k*2 * self.num_samples, 1) * self.mask + q_sample_alphas_onehot.repeat(1, self.model.k*2) * (1 - self.mask)
+
+            baselines = self.q_func(q_inputs).view(self.model.k * 2, self.num_samples).mean(1)
+            ((clf_loss_detach - baselines).detach()*sto_alphas.log_prob(sample_alphas)/5.).sum().backward(retain_graph=True if ite < 4 else False)
+
+            # tmp1 = torch.autograd.grad(
+            #     [loss_alphas], self.model.arch_parameters(), grad_outputs=torch.ones_like(loss_alphas))[0]
+            #
+            # logp_grads = torch.autograd.grad(
+            #     [logp], self.model.arch_parameters(), grad_outputs=torch.ones_like(logp))[0]
+            #
+            # neg_ent = - HLoss()(self.model.alphas) * ent_weight#self.args.arch_reg_weight
+            # entropy_grads = torch.autograd.grad(
+            #     [neg_ent], self.model.arch_parameters(), grad_outputs=torch.ones_like(neg_ent))[0]
+            #
+            # outputs = []
+            # for i in range(self.model.k*2):
+            #     outputs.append("{:.3f}".format((clf_loss_detach - baselines[i]).data.cpu().numpy()[0]))
+            #     tmp_grad = (clf_loss_detach - baselines[i]) * logp_grads[i].detach()
+            #     print(tmp1[i].data.cpu().numpy(), tmp_grad.data.cpu().numpy())
+            #     assert(np.all(np.isclose(tmp1[i].data.cpu().numpy(), tmp_grad.data.cpu().numpy())))
+            #     #assert(np.all(tmp1[i].data.cpu().numpy() == tmp_grad.data.cpu().numpy()))
+            #     #self.model.alphas[i].backward(tmp_grad + entropy_grads[i])
+
+
+        #q_inputs = torch.cat((q_inputs, ), 0)
+        # print("------>")
+        # for i in range(self.model.k*2 * self.num_samples):
+        #     tmp = q_inputs[i].data.cpu().numpy()
+        #     print(",".join([str(int(ii)) for ii in tmp]))
+        #     tmp2 = samples_onehot_flatten.data.cpu().numpy()
+        #     print(",".join([str(int(ii)) for ii in tmp2]))
+        #
+        #     k1 = int(i / self.model.num_ops)
+        #     k2 = i % self.model.num_ops
+        #     for j in range(self.num_alphas):
+        #         if int(j / self.model.num_ops) == k1:
+        #             if j == i:
+        #                 assert(tmp[j] == 1)
+        #             else:
+        #                 assert(tmp[j] == 0)
+        #         else:
+        #             assert(tmp2[j] == tmp[j])
+
+        neg_ent = - HLoss()(self.model.alphas) * ent_weight
+        neg_ent.backward()
+        self.logit_optim.step()
+        t1 += time.time()
+        t2 = -time.time()
+        #print(", ".join(outputs))
+
+        q_inputs_train = torch.stack(q_inputs_train)
+        q_outputs_train = torch.stack(q_outputs_train)
+        q_outputs_train_ = self.q_func(q_inputs_train)
+        var_loss = ((q_outputs_train_ - q_outputs_train)**2).sum()
+        var_loss.backward()
+        self.cv_optim.step()
+        t2 += time.time()
+        #print(t0, t1, t2)
+
+        return clf_logits, clf_loss, neg_ent, var_loss
 
 class CategoricalRelaxOptimizer1(object):
     def __init__(self, model, args):
@@ -125,14 +239,14 @@ class CategoricalRelaxOptimizer1(object):
         # clf_loss_detach = clf_loss.detach()
         clf_logits_valid = self.model(input_valid, arch)
         clf_loss_detach = criterion(clf_logits_valid, target_valid).detach()
-        clf_loss_detach_normed = (clf_loss_detach - self.history_f.mean()) / self.history_f.std()
-        self.history_f[self.idx_f % self.num_history] = clf_loss_detach
+        # clf_loss_detach_normed = (clf_loss_detach - self.history_f.mean()) / self.history_f.std()
+        # self.history_f[self.idx_f % self.num_history] = clf_loss_detach
 
         #tmp = self.history_f.data.cpu().numpy()
         #print(", ".join(["{:.2f}".format(tmp[(self.idx_f-i)%self.num_history]) for i in range(self.num_history)]))
-        self.idx_f += 1
-        if self.idx_f <= self.num_history:
-            return clf_logits, clf_loss, Variable(torch.Tensor([0]).cuda()), Variable(torch.Tensor([0]).cuda())
+        # self.idx_f += 1
+        # if self.idx_f <= self.num_history:
+        #     return clf_logits, clf_loss, Variable(torch.Tensor([0]).cuda()), Variable(torch.Tensor([0]).cuda())
 
         samples_onehot = list(samples_onehot)
         z_inputs, z_tilde_inputs = [], []
@@ -156,15 +270,12 @@ class CategoricalRelaxOptimizer1(object):
 
         var_loss = 0
         for i in range(self.model.k*2):
-            tmp_grad = ddiff_grads[i]+(clf_loss_detach_normed - f_z_tilde[i, 0]) * logp_grads[i].detach()
+            tmp_grad = ddiff_grads[i]+(clf_loss_detach - f_z_tilde[i, 0]) * logp_grads[i].detach()
             var_loss += (tmp_grad**2).sum()
             self.model.alphas[i].backward(tmp_grad + entropy_grads[i])
-        #grads = ddiff_grads + (clf_loss.detach() - f_z_tilde) * logp_grads.detach()
 
-        #self.model.arch_params.backward(entropy_grads + grads)
         self.logit_optim.step()
 
-        #var_loss = (grads ** 2).sum()
         #var_loss += (f_b - clf_loss_detach) ** 2
         var_loss.backward()
         self.cv_optim.step()
@@ -419,7 +530,7 @@ class ArmOptimizer(object):
 class CategoricalRelaxOptimizer(object):
     def __init__(self, model, args):
       self.model = model
-      self.logit_optim =torch.optim.Adam(model.arch_parameters(), lr=args.arch_learning_rate, betas=(0.5, 0.999), weight_decay=1e-4)#
+      self.logit_optim =torch.optim.Adam(model.arch_parameters(), lr=args.arch_learning_rate)#
 
       self.log_temp = Variable(torch.zeros(model.k * 2).cuda(), requires_grad=True)
       self.log_temp_betas = [Variable(torch.zeros(1).cuda(), requires_grad=True) for i in range(len(model.betas))]
@@ -533,7 +644,10 @@ class CategoricalRelaxOptimizer(object):
         nn.utils.clip_grad_norm(self.model.parameters(), self.args.grad_clip)
         network_optimizer.step()
 
-        neg_ent = -(sum([HLoss()(var) for var in self.model._arch_parameters])) * self.args.arch_reg_weight
+        clf_logits_valid = self.model(input_valid, arch.split(self.model.k))
+        clf_loss_detach = criterion(clf_logits_valid, target_valid).detach()
+
+        neg_ent = -(sum([HLoss()(var) for var in self.model._arch_parameters])) * ent_weight#self.args.arch_reg_weight
         entropy_grads = torch.autograd.grad(
             [neg_ent], self.model.arch_parameters(), grad_outputs=torch.ones_like(neg_ent))
 
@@ -554,7 +668,6 @@ class CategoricalRelaxOptimizer(object):
             [logp], self.model.arch_parameters(), grad_outputs=torch.ones_like(logp))
 
         var_loss = 0
-        clf_loss_detach = clf_loss.detach()
         for i, var in enumerate(self.model._arch_parameters):
             tmp_grad = ddiff_grads[i]+(clf_loss_detach - f_z_tilde[i, 0]) * logp_grads[i].detach()
             var_loss += (tmp_grad**2).sum()

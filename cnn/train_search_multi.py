@@ -14,9 +14,9 @@ import torchvision.datasets as dset
 import torch.backends.cudnn as cudnn
 
 from torch.autograd import Variable
-from model_search import Network
+from model_search_multi import Network
 from architect import Architect
-from relax import RelaxOptimizer, ArmOptimizer, CategoricalRelaxOptimizer2, ReinforceOptimizer
+from relax import RelaxOptimizer, ArmOptimizer, CategoricalRelaxOptimizer1, ReinforceOptimizer, CategoricalRelaxOptimizer
 
 
 parser = argparse.ArgumentParser("cifar")
@@ -28,7 +28,7 @@ parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
 parser.add_argument('--weight_decay', type=float, default=3e-4, help='weight decay')
 parser.add_argument('--report_freq', type=float, default=50, help='report frequency')
 parser.add_argument('--gpu', type=int, default=0, help='gpu device id')
-parser.add_argument('--epochs', type=int, default=100, help='num of training epochs')
+parser.add_argument('--epochs', type=int, default=150, help='num of training epochs')
 parser.add_argument('--init_channels', type=int, default=16, help='num of init channels')
 parser.add_argument('--layers', type=int, default=8, help='total number of layers')
 parser.add_argument('--model_path', type=str, default='saved_models', help='path to save the model')
@@ -38,15 +38,14 @@ parser.add_argument('--drop_path_prob', type=float, default=0.3, help='drop path
 parser.add_argument('--save', type=str, default='EXP', help='experiment name')
 parser.add_argument('--seed', type=int, default=2, help='random seed')
 parser.add_argument('--grad_clip', type=float, default=5, help='gradient clipping')
-parser.add_argument('--train_portion', type=float, default=0.9, help='portion of training data')
+parser.add_argument('--train_portion', type=float, default=0.5, help='portion of training data')
 parser.add_argument('--unrolled', action='store_true', default=False, help='use one-step unrolled validation loss')
-parser.add_argument('--arch_learning_rate', type=float, default=0.01, help='learning rate for arch encoding')
+parser.add_argument('--arch_learning_rate', type=float, default=0.001, help='learning rate for arch encoding')
 parser.add_argument('--arch_reg_weight', type=float, default=0.001, help='reg weight for arch encoding')
 #parser.add_argument('--rampdown_length', type=float, default=100, help='reg weight for arch encoding')
-parser.add_argument('--cv_learning_rate', type=float, default=0.001, help='learning rate for cv')
-parser.add_argument('--cv_beta1', type=float, default=0.9, help='beta1 for cv')
+parser.add_argument('--cv_learning_rate', type=float, default=0.03, help='learning rate for cv')
 parser.add_argument('--cv_hidden', type=int, default=50, help='hidden size for cv')
-parser.add_argument('--num_history', type=int, default=10, help='num of history')
+# parser.add_argument('--num_history', type=int, default=10, help='num of history')
 # parser.add_argument('--smoothing_factor', type=float, default=0.8, help='smoothing_factor for cv')
 # parser.add_argument('--num_arch_samples', type=int, default=5, help='num_arch_samples')
 args = parser.parse_args()
@@ -112,15 +111,15 @@ def main():
         optimizer, float(args.epochs), eta_min=args.learning_rate_min)
 
   #architect = Architect(model, args)
-  architect = CategoricalRelaxOptimizer2(model, args)
+  architect = CategoricalRelaxOptimizer(model, args)
 
   for epoch in range(args.epochs):
-    if epoch == 0:
-        for g in architect.logit_optim.param_groups:
-            g['lr'] = 0.00001
-    elif epoch == 20:
-        for g in architect.logit_optim.param_groups:
-            g['lr'] = args.arch_learning_rate
+    # if epoch == 0:
+    #     for g in architect.logit_optim.param_groups:
+    #         g['lr'] = 0.0001
+    # elif epoch == 20:
+    #     for g in architect.logit_optim.param_groups:
+    #         g['lr'] = args.arch_learning_rate
     scheduler.step()
     lr = scheduler.get_lr()[0]
     logging.info('epoch %d lr %e', epoch, lr)
@@ -129,10 +128,10 @@ def main():
     logging.info('genotype = %s', genotype)
 
     #print(arch)
-    #print(model.alphas.data.cpu().numpy())
     for alpha in model.alphas:
         print(" ".join(["{:.2f}".format(ii) for ii in alpha.data.cpu().numpy()]))
-
+    concat_betas = torch.cat(model.betas)
+    print(" ".join(["{:.2f}".format(ii) for ii in concat_betas.data.cpu().numpy()]))
     # training
     train_acc, train_obj = train(train_queue, valid_queue, model, architect, criterion, optimizer, lr, epoch)
     logging.info('train_acc %f', train_acc)
@@ -152,6 +151,21 @@ def train(train_queue, valid_queue, model, architect, criterion, optimizer, lr, 
   vars = utils.AvgrageMeter()
 
   ent_weight = args.arch_reg_weight# * (0.9120108393559098 ** (min(epoch, 50)))
+  if epoch == 0:
+      for g in architect.logit_optim.param_groups:
+          g['lr'] = 0#0#0.1#0.01
+  elif epoch == 25:
+      for g in architect.logit_optim.param_groups:
+          g['lr'] = 0.001#0#0.1#0.01
+  elif epoch == 50:
+      for g in architect.logit_optim.param_groups:
+          g['lr'] = 0.01#0.01#0.1#0.01
+  elif epoch == 75:
+      for g in architect.logit_optim.param_groups:
+          g['lr'] = 0.1#0.01#0.1#0.1
+  elif epoch == 100:
+      for g in architect.logit_optim.param_groups:
+          g['lr'] = 0.01#0.1#0.1#0.1
 
   for step, (input, target) in enumerate(train_queue):
     model.train()
